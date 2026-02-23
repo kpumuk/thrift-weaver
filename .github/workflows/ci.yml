@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Run formatter/linter/tests
+        run: |
+          mise run fmt
+          git diff --exit-code
+          mise run lint
+          mise run test
+
+  build-smoke:
+    name: build-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ./go.mod
+
+      - name: Build CLI binaries (smoke)
+        run: go build ./cmd/...
+
+  parser-generation-drift:
+    name: parser-generation-drift (placeholder)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Placeholder drift check
+        run: |
+          echo "TODO(TW-M0-CI-01/TW-M0-SCRIPTS-01): implement tree-sitter parser generation drift check"
+          test -f scripts/generate-tree-sitter.sh || true

@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    name: release
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ./go.mod
+
+      - name: Run GoReleaser (draft)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Placeholder: generate thriftls managed-install manifest"
+        run: |
+          echo "TODO(TW-M5-REL-02): generate thriftls manifest from GoReleaser artifacts/checksums"
+          echo "Expected outputs: machine-readable manifest + checksums artifact"
+
+      - name: "Placeholder: VS Code extension packaging handoff"
+        run: |
+          echo "TODO(TW-M4-VSC-12/TW-M5-REL-04): build/package .vsix and integrate with release artifacts"
+
+      - name: "Release workflow notes (M0 placeholder)"
+        run: |
+          echo "Required secrets/environment notes:"
+          echo "- GITHUB_TOKEN (provided by Actions) for GitHub release publishing"
+          echo "- Additional secrets may be required later for signing/provenance and extension publishing"

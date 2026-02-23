@@ -1,7 +1,8 @@
 [tools]
 golang = "1.26.0"
 golangci-lint = "2.10.1"
-lefthook = "2.0.13"
+lefthook = "2.1.1"
+goreleaser = "2.14.0"
 
 [tasks.ci]
 description = "Run formatter, linter, and tests"
