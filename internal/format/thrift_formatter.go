@@ -12,9 +12,17 @@ import (
 
 type formatHints struct {
 	topLevelStart  map[uint32]int
+	topLevelBreaks map[uint32]int
 	memberStart    map[uint32]struct{}
 	declBlockOpen  map[uint32]declBlockSpec
 	declBlockClose map[uint32]declBlockSpec
+}
+
+func (h formatHints) topLevelBreakCount(tok uint32) int {
+	if breaks := h.topLevelBreaks[tok]; breaks > 0 {
+		return breaks
+	}
+	return 2
 }
 
 type declBlockSpec struct {
@@ -168,7 +176,7 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			w.requestBreaks(1)
 		}
 		if order, ok := hints.topLevelStart[idx]; ok && order > 0 {
-			w.requestBreaks(2)
+			w.requestBreaks(hints.topLevelBreakCount(idx))
 		} else if _, ok := hints.memberStart[idx]; ok {
 			w.requestBreaks(1)
 		}
@@ -201,17 +209,24 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 func collectFormatHints(tree *syntax.Tree) formatHints {
 	hints := formatHints{
 		topLevelStart:  make(map[uint32]int),
+		topLevelBreaks: make(map[uint32]int),
 		memberStart:    make(map[uint32]struct{}),
 		declBlockOpen:  make(map[uint32]declBlockSpec),
 		declBlockClose: make(map[uint32]declBlockSpec),
 	}
 
+	prevTopKind := ""
 	for order, id := range tree.TopLevelDeclarationIDs() {
 		n := tree.NodeByID(id)
 		if n == nil {
 			continue
 		}
+		kind := syntax.KindName(n.Kind)
 		hints.topLevelStart[n.FirstToken] = order
+		if order > 0 {
+			hints.topLevelBreaks[n.FirstToken] = topLevelBreakCount(prevTopKind, kind)
+		}
+		prevTopKind = kind
 	}
 
 	for i := 1; i < len(tree.Nodes); i++ {
@@ -243,6 +258,31 @@ func collectFormatHints(tree *syntax.Tree) formatHints {
 	}
 
 	return hints
+}
+
+func topLevelBreakCount(prevKind, currKind string) int {
+	if sameTopLevelDirectiveGroup(prevKind, currKind) {
+		return 1
+	}
+	return 2
+}
+
+func sameTopLevelDirectiveGroup(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return topLevelDirectiveGroup(a) != "" && topLevelDirectiveGroup(a) == topLevelDirectiveGroup(b)
+}
+
+func topLevelDirectiveGroup(kind string) string {
+	switch kind {
+	case "include_declaration", "cpp_include_declaration":
+		return "include"
+	case "namespace_declaration":
+		return "namespace"
+	default:
+		return ""
+	}
 }
 
 func countNamedChildNodes(tree *syntax.Tree, parent syntax.NodeID) int {

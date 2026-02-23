@@ -99,3 +99,34 @@ service API{async void go(1:byte x,2:uuid id);}
 		t.Fatalf("unexpected spelling rewrite to i8\noutput:\n%s", out)
 	}
 }
+
+func TestSourceGroupsAdjacentIncludesAndNamespacesWithoutBlankLines(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`include "a.thrift"
+cpp_include "b.h"
+namespace go foo.bar
+namespace rb foo.bar
+typedef i32 ID
+`)
+
+	res, err := Source(context.Background(), src, "test.thrift", Options{})
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+
+	got := string(res.Output)
+	want := strings.Join([]string{
+		`include "a.thrift"`,
+		`cpp_include "b.h"`,
+		``,
+		`namespace go foo.bar`,
+		`namespace rb foo.bar`,
+		``,
+		`typedef i32 ID`,
+		``,
+	}, "\n")
+	if got != want {
+		t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
