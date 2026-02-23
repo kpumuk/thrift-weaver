@@ -135,7 +135,19 @@ func childrenOf(raw *sitter.Node) []sitter.Node {
 	}
 	cursor := raw.Walk()
 	defer cursor.Close()
-	return raw.Children(cursor)
+	children := raw.Children(cursor)
+	if len(children) == 0 {
+		return nil
+	}
+
+	out := children[:0]
+	for i := range children {
+		if children[i].IsExtra() {
+			continue
+		}
+		out = append(out, children[i])
+	}
+	return out
 }
 
 func nodeFlagsFromTS(n *sitter.Node) NodeFlags {

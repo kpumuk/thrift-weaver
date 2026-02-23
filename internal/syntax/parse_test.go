@@ -150,6 +150,28 @@ func TestParseAlignmentInvariantsOnValidAndMalformed(t *testing.T) {
 	}
 }
 
+func TestParseIgnoresExtraCommentNodesForAlignment(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`struct Tenant {
+  1: optional string id
+    # Optional, as secret can only be read once on creation (or reset), and then hashed
+  2: optional string secret
+}
+`)
+
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if hasDiagnosticCode(tree.Diagnostics, DiagnosticInternalAlignment) {
+		t.Fatalf("unexpected internal alignment diagnostics with # comment: %+v", tree.Diagnostics)
+	}
+	if err := assertTreeAlignment(tree); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReparseEquivalentToParse(t *testing.T) {
 	t.Parallel()
 
