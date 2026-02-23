@@ -8,6 +8,14 @@ pre-push:
 pre-commit:
   fail_on_changes: "always"
   jobs:
+    - name: generate tree-sitter parser
+      glob:
+        - "grammar/tree-sitter-thrift/grammar.js"
+        - "grammar/tree-sitter-thrift/tree-sitter.json"
+        - "scripts/generate-tree-sitter.sh"
+        - "mise.toml"
+      run: mise exec tree-sitter -- scripts/generate-tree-sitter.sh
+
     - name: lint
       glob:
         - ".golangci.yml"

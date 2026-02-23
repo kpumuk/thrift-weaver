@@ -128,7 +128,7 @@ func TestLexMalformedInputsEmitErrorTokensAndDiagnostics(t *testing.T) {
 func TestLexTriviaAndLiteralFidelity(t *testing.T) {
 	t.Parallel()
 
-	src := []byte("  // c1\r\n# c2\r\nconst i32 x = 0XBeEf;\n\"a\\\"b\" 'bee'")
+	src := []byte("  // c1\r\n# c2\r\nconst i32 x = 0XBeEf;\n\"a\\\"b\" 'bee' '00000000-4444-CCCC-ffff-0123456789ab' '{00112233-4455-6677-8899-aaBBccDDeeFF}'")
 	res := Lex(src)
 
 	if len(res.Diagnostics) != 0 {
@@ -154,7 +154,13 @@ func TestLexTriviaAndLiteralFidelity(t *testing.T) {
 	}
 
 	// Literal spellings must be preserved exactly.
-	wantLiterals := []string{"0XBeEf", "\"a\\\"b\"", "'bee'"}
+	wantLiterals := []string{
+		"0XBeEf",
+		"\"a\\\"b\"",
+		"'bee'",
+		"'00000000-4444-CCCC-ffff-0123456789ab'",
+		"'{00112233-4455-6677-8899-aaBBccDDeeFF}'",
+	}
 	if fmt.Sprint(gotLiterals) != fmt.Sprint(wantLiterals) {
 		t.Fatalf("literals = %v, want %v", gotLiterals, wantLiterals)
 	}

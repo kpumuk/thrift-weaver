@@ -1,5 +1,6 @@
 [tools]
 golang = "1.26.0"
+tree-sitter = "0.26.5"
 golangci-lint = "2.10.1"
 lefthook = "2.1.1"
 goreleaser = "2.14.0"

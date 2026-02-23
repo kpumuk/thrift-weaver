@@ -46,6 +46,7 @@ const (
 	TokenKwDouble
 	TokenKwString
 	TokenKwBinary
+	TokenKwUUID
 	TokenKwMap
 	TokenKwList
 	TokenKwSet
@@ -139,6 +140,8 @@ func (k TokenKind) String() string {
 		return "KwString"
 	case TokenKwBinary:
 		return "KwBinary"
+	case TokenKwUUID:
+		return "KwUUID"
 	case TokenKwMap:
 		return "KwMap"
 	case TokenKwList:
@@ -244,6 +247,7 @@ var keywordKinds = map[string]TokenKind{
 	"double":      TokenKwDouble,
 	"string":      TokenKwString,
 	"binary":      TokenKwBinary,
+	"uuid":        TokenKwUUID,
 	"map":         TokenKwMap,
 	"list":        TokenKwList,
 	"set":         TokenKwSet,

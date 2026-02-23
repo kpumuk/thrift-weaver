@@ -1,0 +1,27 @@
+{
+  "grammars": [
+    {
+      "name": "thrift",
+      "camelcase": "Thrift",
+      "scope": "source.thrift",
+      "path": ".",
+      "file-types": ["thrift"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Thrift IDL grammar for tree-sitter",
+    "authors": [
+      { "name": "Dmytro Shteflyuk" }
+    ],
+    "links": {
+      "repository": "https://github.com/kpumuk/thrift-weaver"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true
+  }
+}

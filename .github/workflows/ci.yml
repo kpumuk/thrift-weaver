@@ -53,13 +53,21 @@ jobs:
         run: go build ./cmd/...
 
   parser-generation-drift:
-    name: parser-generation-drift (placeholder)
+    name: parser-generation-drift
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Placeholder drift check
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Regenerate tree-sitter parser
+        run: scripts/generate-tree-sitter.sh
+
+      - name: Check generated parser drift
         run: |
-          echo "TODO(TW-M0-CI-01/TW-M0-SCRIPTS-01): implement tree-sitter parser generation drift check"
-          test -f scripts/generate-tree-sitter.sh || true
+          git diff --exit-code -- grammar/tree-sitter-thrift/src
