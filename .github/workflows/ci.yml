@@ -71,3 +71,29 @@ jobs:
       - name: Check generated parser drift
         run: |
           git diff --exit-code -- grammar/tree-sitter-thrift/src
+
+  thrift-oracle-compat:
+    name: thrift-oracle-compat
+    if: ${{ vars.THRIFT_ORACLE_VERSION_PREFIX != '' }}
+    runs-on: ubuntu-22.04
+    env:
+      THRIFT_ORACLE_REQUIRED: "1"
+      THRIFT_ORACLE_VERSION_PREFIX: ${{ vars.THRIFT_ORACLE_VERSION_PREFIX }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Install thrift compiler (oracle)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y thrift-compiler
+          thrift -version
+
+      - name: Run official thrift oracle compatibility test
+        run: mise exec golang -- go test ./internal/format -run '^TestFormattedOutputParsesWithOfficialThriftOracle$' -count=1

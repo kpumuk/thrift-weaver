@@ -171,24 +171,32 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			}
 			break
 		}
+		leadingHasComment := triviaHasComment(tok.Leading)
 
 		if spec, ok := hints.declBlockClose[idx]; ok && spec.HasMembers {
 			if indentLevel > 0 {
 				indentLevel--
 			}
-			w.requestBreaks(1)
+			if !leadingHasComment {
+				w.requestBreaks(1)
+			}
 		}
 		if _, ok := hints.wrapListClose[idx]; ok {
 			if indentLevel > 0 {
 				indentLevel--
 			}
-			w.requestBreaks(1)
+			if !leadingHasComment {
+				w.requestBreaks(1)
+			}
 		}
-		leadingHasComment := triviaHasComment(tok.Leading)
-		if !leadingHasComment {
-			if order, ok := hints.topLevelStart[idx]; ok && order > 0 {
-				w.requestBreaks(hints.topLevelBreakCount(idx))
-			} else if _, ok := hints.memberStart[idx]; ok {
+		if order, ok := hints.topLevelStart[idx]; ok && order > 0 {
+			breaks := hints.topLevelBreakCount(idx)
+			if leadingHasComment {
+				breaks = max(breaks-leadingNewlinesBeforeFirstComment(tok.Leading), 0)
+			}
+			w.requestBreaks(breaks)
+		} else if !leadingHasComment {
+			if _, ok := hints.memberStart[idx]; ok {
 				w.requestBreaks(1)
 			} else if _, ok := hints.wrapListStart[idx]; ok {
 				w.requestBreaks(1)
@@ -210,11 +218,15 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 
 		if spec, ok := hints.declBlockOpen[idx]; ok && spec.HasMembers {
 			indentLevel++
-			w.requestBreaks(1)
+			if !nextTokenHasLeadingComment(tree.Tokens, i+1) {
+				w.requestBreaks(1)
+			}
 		}
 		if _, ok := hints.wrapListOpen[idx]; ok {
 			indentLevel++
-			w.requestBreaks(1)
+			if !nextTokenHasLeadingComment(tree.Tokens, i+1) {
+				w.requestBreaks(1)
+			}
 		}
 
 		prevKind = tok.Kind
@@ -245,7 +257,11 @@ func collectFormatHints(tree *syntax.Tree, opts Options) formatHints {
 		kind := syntax.KindName(n.Kind)
 		hints.topLevelStart[n.FirstToken] = order
 		if order > 0 {
-			hints.topLevelBreaks[n.FirstToken] = topLevelBreakCount(prevTopKind, kind)
+			breaks := topLevelBreakCount(prevTopKind, kind)
+			if prevTopKind == "const_declaration" && kind == "const_declaration" && int(n.FirstToken) < len(tree.Tokens) {
+				breaks = max(leadingNewlinesBeforeFirstComment(tree.Tokens[n.FirstToken].Leading), 1)
+			}
+			hints.topLevelBreaks[n.FirstToken] = breaks
 		}
 		prevTopKind = kind
 	}
@@ -543,6 +559,29 @@ func triviaHasComment(trivia []lexer.Trivia) bool {
 		}
 	}
 	return false
+}
+
+func leadingNewlinesBeforeFirstComment(trivia []lexer.Trivia) int {
+	count := 0
+	for _, tr := range trivia {
+		if isCommentTrivia(tr.Kind) {
+			return count
+		}
+		if tr.Kind == lexer.TriviaNewline {
+			count++
+		}
+	}
+	return count
+}
+
+func nextTokenHasLeadingComment(tokens []lexer.Token, next int) bool {
+	if next < 0 || next >= len(tokens) {
+		return false
+	}
+	if tokens[next].Kind == lexer.TokenEOF {
+		return false
+	}
+	return triviaHasComment(tokens[next].Leading)
 }
 
 func repeatString(s string, count int) string {
