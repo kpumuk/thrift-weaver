@@ -1,10 +1,10 @@
 package format
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	"github.com/kpumuk/thrift-weaver/internal/text"
@@ -22,7 +22,8 @@ func Document(ctx context.Context, tree *syntax.Tree, opts Options) (Result, err
 	if tree == nil {
 		return Result{}, errors.New("nil syntax tree")
 	}
-	if _, err := normalizeOptions(opts); err != nil {
+	normOpts, err := normalizeOptions(opts)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -37,9 +38,13 @@ func Document(ctx context.Context, tree *syntax.Tree, opts Options) (Result, err
 		return unsafeResult(diags, UnsafeReasonSyntaxErrors, "syntax diagnostics present (fail-closed v1 policy)")
 	}
 
+	out, err := formatSyntaxTree(tree, normOpts, policy)
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
-		Output:      slices.Clone(tree.Source),
-		Changed:     false,
+		Output:      out,
+		Changed:     !bytes.Equal(out, tree.Source),
 		Diagnostics: diags,
 	}, nil
 }
@@ -61,7 +66,6 @@ func Range(ctx context.Context, tree *syntax.Tree, r text.Span, opts Options) (R
 	res, err := Document(ctx, tree, opts)
 	return RangeResult{
 		Diagnostics: res.Diagnostics,
-		Edits:       nil,
 	}, err
 }
 
@@ -76,13 +80,9 @@ func Source(ctx context.Context, src []byte, uri string, opts Options) (Result, 
 
 func hasUnsafeSyntaxDiagnostics(diags []syntax.Diagnostic) bool {
 	for _, d := range diags {
-		if d.Severity != syntax.SeverityError {
-			continue
+		if d.Severity == syntax.SeverityError && d.Source != "formatter" {
+			return true
 		}
-		if d.Source == "formatter" {
-			continue
-		}
-		return true
 	}
 	return false
 }
