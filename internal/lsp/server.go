@@ -22,11 +22,19 @@ type Server struct {
 	mu            sync.Mutex
 	shutdown      bool
 	exitRequested bool
+
+	reqMu            sync.Mutex
+	requestCancels   map[string]context.CancelFunc
+	pendingCancelled map[string]struct{}
 }
 
 // NewServer creates a new LSP server instance.
 func NewServer() *Server {
-	return &Server{store: NewSnapshotStore()}
+	return &Server{
+		store:            NewSnapshotStore(),
+		requestCancels:   make(map[string]context.CancelFunc),
+		pendingCancelled: make(map[string]struct{}),
+	}
 }
 
 // Store returns the backing snapshot store (primarily for tests and future handlers).
@@ -96,6 +104,12 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 //nolint:funcorder // dispatch is kept near Run for readability of request flow.
 func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) error {
 	isRequest := len(req.ID) != 0
+	if isRequest {
+		var cancel context.CancelFunc
+		ctx, cancel = s.beginRequestContext(ctx, req.ID)
+		defer cancel()
+		defer s.endRequestContext(req.ID)
+	}
 
 	writeResp := func(result any) error {
 		if !isRequest {
@@ -131,6 +145,13 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 	case "exit":
 		s.Exit()
 		return ErrShutdownRequested
+	case "$/cancelRequest":
+		var p CancelParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		s.cancelRequest(p)
+		return nil
 	case "textDocument/didOpen":
 		var p DidOpenParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -203,7 +224,7 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		}
 		symbols, err := s.DocumentSymbol(ctx, p)
 		if err != nil {
-			return writeErr(jsonRPCInternalError, err.Error())
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(symbols)
 	case "textDocument/foldingRange":
@@ -213,7 +234,7 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		}
 		ranges, err := s.FoldingRange(ctx, p)
 		if err != nil {
-			return writeErr(jsonRPCInternalError, err.Error())
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(ranges)
 	case "textDocument/selectionRange":
@@ -223,7 +244,7 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		}
 		ranges, err := s.SelectionRange(ctx, p)
 		if err != nil {
-			return writeErr(jsonRPCInternalError, err.Error())
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(ranges)
 	default:
@@ -413,6 +434,71 @@ func (s *Server) writeNotification(w *bufio.Writer, method string, params any) e
 	return writeFramedMessage(w, body)
 }
 
+// cancelRequest records or triggers cancellation for a request id.
+//
+// v1 note: the server processes messages sequentially, so $/cancelRequest can only
+// cancel a request before dispatch begins (or future concurrent handlers). This is
+// still useful for robustness tests and keeps cancellation non-fatal.
+func (s *Server) cancelRequest(p CancelParams) {
+	if s == nil {
+		return
+	}
+	key := requestIDKey(p.ID)
+	if key == "" {
+		return
+	}
+	s.reqMu.Lock()
+	cancel := s.requestCancels[key]
+	if cancel != nil {
+		delete(s.requestCancels, key)
+	}
+	s.pendingCancelled[key] = struct{}{}
+	s.reqMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Server) beginRequestContext(parent context.Context, id json.RawMessage) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	key := requestIDKey(id)
+	if s == nil || key == "" {
+		return context.WithCancel(parent)
+	}
+	ctx, cancel := context.WithCancel(parent)
+	s.reqMu.Lock()
+	s.requestCancels[key] = cancel
+	if _, ok := s.pendingCancelled[key]; ok {
+		delete(s.pendingCancelled, key)
+		cancel()
+	}
+	s.reqMu.Unlock()
+	return ctx, cancel
+}
+
+func (s *Server) endRequestContext(id json.RawMessage) {
+	if s == nil {
+		return
+	}
+	key := requestIDKey(id)
+	if key == "" {
+		return
+	}
+	s.reqMu.Lock()
+	delete(s.requestCancels, key)
+	delete(s.pendingCancelled, key)
+	s.reqMu.Unlock()
+}
+
+func requestIDKey(id json.RawMessage) string {
+	if len(id) == 0 {
+		return ""
+	}
+	return string(id)
+}
+
 func formattingOptionsFromLSP(in FormattingOptions) fmtengine.Options {
 	opts := fmtengine.Options{}
 	if in.InsertSpaces && in.TabSize > 0 {
@@ -557,6 +643,13 @@ func lspErrorCodeForFormatting(err error) int {
 	default:
 		return jsonRPCInternalError
 	}
+}
+
+func lspErrorCodeForQuery(err error) int {
+	if errors.Is(err, context.Canceled) {
+		return lspErrorRequestCancelled
+	}
+	return jsonRPCInternalError
 }
 
 func readFramedMessage(r *bufio.Reader) ([]byte, error) {

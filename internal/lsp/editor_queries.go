@@ -32,8 +32,7 @@ var (
 
 // DocumentSymbol handles textDocument/documentSymbol.
 func (s *Server) DocumentSymbol(ctx context.Context, p DocumentSymbolParams) ([]DocumentSymbol, error) {
-	_ = ctx
-	tree, err := s.queryTree(p.TextDocument.URI)
+	tree, err := s.queryTreeWithContext(ctx, p.TextDocument.URI)
 	if err != nil {
 		return nil, err
 	}
@@ -42,8 +41,7 @@ func (s *Server) DocumentSymbol(ctx context.Context, p DocumentSymbolParams) ([]
 
 // FoldingRange handles textDocument/foldingRange.
 func (s *Server) FoldingRange(ctx context.Context, p FoldingRangeParams) ([]FoldingRange, error) {
-	_ = ctx
-	tree, err := s.queryTree(p.TextDocument.URI)
+	tree, err := s.queryTreeWithContext(ctx, p.TextDocument.URI)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +50,7 @@ func (s *Server) FoldingRange(ctx context.Context, p FoldingRangeParams) ([]Fold
 
 // SelectionRange handles textDocument/selectionRange.
 func (s *Server) SelectionRange(ctx context.Context, p SelectionRangeParams) ([]SelectionRange, error) {
-	_ = ctx
-	tree, err := s.queryTree(p.TextDocument.URI)
+	tree, err := s.queryTreeWithContext(ctx, p.TextDocument.URI)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +63,23 @@ func (s *Server) queryTree(uri string) (*syntax.Tree, error) {
 		return nil, err
 	}
 	return snap.Tree, nil
+}
+
+func (s *Server) queryTreeWithContext(ctx context.Context, uri string) (*syntax.Tree, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tree, err := s.queryTree(uri)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return tree, nil
 }
 
 func lspDocumentSymbolsFromSyntax(tree *syntax.Tree) ([]DocumentSymbol, error) {

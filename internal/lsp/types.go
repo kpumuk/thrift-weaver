@@ -28,6 +28,11 @@ type ResponseError struct {
 	Message string `json:"message"`
 }
 
+// CancelParams is the LSP $/cancelRequest notification payload.
+type CancelParams struct {
+	ID json.RawMessage `json:"id"`
+}
+
 // InitializeParams is the LSP initialize request payload subset used in v1.
 type InitializeParams struct {
 	ProcessID *int64 `json:"processId,omitempty"`
