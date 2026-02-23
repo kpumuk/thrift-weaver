@@ -345,6 +345,139 @@ func TestServerRunRangeFormattingUsesUTF16RangeAndReturnsEdits(t *testing.T) {
 	}
 }
 
+func TestServerRunEditorQueryFeatures(t *testing.T) {
+	t.Parallel()
+
+	src := strings.TrimLeft(`
+service Demo {
+  // method comment
+  void ping(1: i32 id) throws (1: string msg)
+}
+
+# header
+# details
+struct Holder {
+  1: string value
+  2: optional string note
+}
+
+enum Color {
+  RED = 1
+  BLUE = 2
+}
+
+typedef map<string, i32> StringIntMap
+const i32 ANSWER = 42
+`, "\n")
+
+	valueStart := strings.Index(src, "value")
+	if valueStart < 0 {
+		t.Fatal("failed to find field name")
+	}
+	li := itext.NewLineIndex([]byte(src))
+	valuePos, err := li.OffsetToUTF16Position(itext.ByteOffset(valueStart))
+	if err != nil {
+		t.Fatalf("OffsetToUTF16Position: %v", err)
+	}
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: "file:///editor.thrift", Version: 1, Text: src},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`10`),
+		Method:  "textDocument/documentSymbol",
+		Params:  mustJSON(t, DocumentSymbolParams{TextDocument: TextDocumentIdentifier{URI: "file:///editor.thrift"}}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`11`),
+		Method:  "textDocument/foldingRange",
+		Params:  mustJSON(t, FoldingRangeParams{TextDocument: TextDocumentIdentifier{URI: "file:///editor.thrift"}}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`12`),
+		Method:  "textDocument/selectionRange",
+		Params: mustJSON(t, SelectionRangeParams{
+			TextDocument: TextDocumentIdentifier{URI: "file:///editor.thrift"},
+			Positions:    []Position{{Line: valuePos.Line, Character: valuePos.Character}},
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	msgs := readAllFrames(t, out.Bytes())
+
+	respSymbols := responseByID(t, msgs, "10")
+	if respSymbols.Error != nil {
+		t.Fatalf("documentSymbol error: %+v", respSymbols.Error)
+	}
+	var symbols []DocumentSymbol
+	marshalRoundtrip(t, respSymbols.Result, &symbols)
+	if len(symbols) < 5 {
+		t.Fatalf("documentSymbol count=%d, want >=5", len(symbols))
+	}
+	demo := findDocumentSymbol(symbols, "Demo")
+	if demo == nil {
+		t.Fatalf("expected Demo symbol in %+v", symbols)
+	}
+	if findDocumentSymbol(demo.Children, "ping") == nil {
+		t.Fatalf("expected ping child under Demo, got %+v", demo.Children)
+	}
+	holder := findDocumentSymbol(symbols, "Holder")
+	if holder == nil {
+		t.Fatalf("expected Holder symbol")
+	}
+	if findDocumentSymbol(holder.Children, "value") == nil {
+		t.Fatalf("expected value field child under Holder, got %+v", holder.Children)
+	}
+	color := findDocumentSymbol(symbols, "Color")
+	if color == nil || findDocumentSymbol(color.Children, "RED") == nil {
+		t.Fatalf("expected enum Color with RED child, got %+v", color)
+	}
+
+	respFolds := responseByID(t, msgs, "11")
+	if respFolds.Error != nil {
+		t.Fatalf("foldingRange error: %+v", respFolds.Error)
+	}
+	var folds []FoldingRange
+	marshalRoundtrip(t, respFolds.Result, &folds)
+	if len(folds) < 4 {
+		t.Fatalf("foldingRange count=%d, want >=4", len(folds))
+	}
+	if !hasFoldingRangeStartingAtLine(folds, 5) { // # header block starts at line 5 (0-based)
+		t.Fatalf("expected comment folding range starting at line 5, got %+v", folds)
+	}
+
+	respSelection := responseByID(t, msgs, "12")
+	if respSelection.Error != nil {
+		t.Fatalf("selectionRange error: %+v", respSelection.Error)
+	}
+	var sels []SelectionRange
+	marshalRoundtrip(t, respSelection.Result, &sels)
+	if len(sels) != 1 {
+		t.Fatalf("selectionRange count=%d, want 1", len(sels))
+	}
+	if sels[0].Parent == nil || sels[0].Parent.Parent == nil {
+		t.Fatalf("expected nested selection parents, got %+v", sels[0])
+	}
+	if sels[0].Range.Start.Line != valuePos.Line {
+		t.Fatalf("inner selection line=%d, want %d", sels[0].Range.Start.Line, valuePos.Line)
+	}
+	if sels[0].Parent.Range.Start.Line > sels[0].Range.Start.Line ||
+		sels[0].Parent.Range.End.Line < sels[0].Range.End.Line {
+		t.Fatalf("parent range %+v should contain child %+v", sels[0].Parent.Range, sels[0].Range)
+	}
+}
+
 func writeReqFrame(t *testing.T, w *bytes.Buffer, req Request) {
 	t.Helper()
 	b, err := json.Marshal(req)
@@ -446,4 +579,22 @@ func responseByID(t *testing.T, msgs []testFrame, id string) Response {
 	}
 	t.Fatalf("response id=%s not found", id)
 	return Response{}
+}
+
+func findDocumentSymbol(in []DocumentSymbol, name string) *DocumentSymbol {
+	for i := range in {
+		if in[i].Name == name {
+			return &in[i]
+		}
+	}
+	return nil
+}
+
+func hasFoldingRangeStartingAtLine(in []FoldingRange, line int) bool {
+	for _, fr := range in {
+		if fr.StartLine == line && fr.EndLine > fr.StartLine {
+			return true
+		}
+	}
+	return false
 }

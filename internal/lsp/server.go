@@ -331,27 +331,6 @@ func (s *Server) RangeFormatting(ctx context.Context, p DocumentRangeFormattingP
 	return lspTextEditsFromByteEdits(snap.Tree.LineIndex, res.Edits)
 }
 
-// DocumentSymbol is a Track C placeholder that returns a valid empty result in Track A.
-func (s *Server) DocumentSymbol(ctx context.Context, p DocumentSymbolParams) ([]DocumentSymbol, error) {
-	_ = ctx
-	_ = p
-	return []DocumentSymbol{}, nil
-}
-
-// FoldingRange is a Track C placeholder that returns a valid empty result in Track A.
-func (s *Server) FoldingRange(ctx context.Context, p FoldingRangeParams) ([]FoldingRange, error) {
-	_ = ctx
-	_ = p
-	return []FoldingRange{}, nil
-}
-
-// SelectionRange is a Track C placeholder that returns a valid empty result in Track A.
-func (s *Server) SelectionRange(ctx context.Context, p SelectionRangeParams) ([]SelectionRange, error) {
-	_ = ctx
-	_ = p
-	return []SelectionRange{}, nil
-}
-
 func (s *Server) writeResponse(w *bufio.Writer, resp Response) error {
 	body, err := json.Marshal(resp)
 	if err != nil {
