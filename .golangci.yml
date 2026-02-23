@@ -1,0 +1,56 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - exhaustive
+    - funcorder
+    - godot
+    - gocritic
+    - gomoddirectives
+    - goprintffuncname
+    - gosec
+    - intrange
+    - misspell
+    - modernize
+    - nakedret
+    - nestif
+    - nilerr
+    - noctx
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - tparallel
+    - unconvert
+    - unparam
+    - whitespace
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+    paths:
+      - "^tmp/"
+      - "^vendor/"
+  settings:
+    gocritic:
+      disabled-checks:
+        - singleCaseSwitch
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - "^tmp/"
+      - "^vendor/"
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kpumuk/thrift-weaver

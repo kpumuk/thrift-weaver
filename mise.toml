@@ -1,0 +1,21 @@
+[tools]
+golang = "1.26.0"
+golangci-lint = "2.10.1"
+lefthook = "2.0.13"
+
+[tasks.ci]
+description = "Run formatter, linter, and tests"
+depends = ["format", "lint", "test"]
+
+[tasks.format]
+description = "Format Go code with golangci-lint formatters"
+run = "golangci-lint fmt"
+alias = "fmt"
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run"
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test ./..."
