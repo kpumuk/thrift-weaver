@@ -2,6 +2,10 @@
   "name": "thrift-weaver-vscode",
   "displayName": "Thrift Weaver",
   "description": "Thrift language support for VS Code",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kpumuk/thrift-weaver/"
+  },
   "version": "0.0.1",
   "publisher": "kpumuk",
   "license": "MIT",
@@ -13,16 +17,19 @@
     "Formatters"
   ],
   "activationEvents": [
-    "onLanguage:thrift"
+    "onLanguage:thrift",
+    "onCommand:thrift.restartLanguageServer"
   ],
   "main": "./dist/extension.js",
   "files": [
     "dist/**",
+    "node_modules/**",
     "syntaxes/**",
     "language-configuration.json",
     "package.json",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -30,7 +37,8 @@
     "watch": "tsc -w -p ./tsconfig.json",
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
     "test:syntax": "node ./scripts/test-syntax.mjs",
-    "test": "npm run typecheck && npm run test:syntax"
+    "test": "npm run typecheck && npm run test:syntax",
+    "package": "npx @vscode/vsce package"
   },
   "contributes": {
     "languages": [
@@ -53,6 +61,19 @@
         "path": "./syntaxes/thrift.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "thrift.restartLanguageServer",
+        "title": "Thrift: Restart Language Server"
+      }
+    ],
+    "configurationDefaults": {
+      "[thrift]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      }
+    },
     "configuration": {
       "title": "Thrift Weaver",
       "properties": {
@@ -87,6 +108,9 @@
         }
       }
     }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

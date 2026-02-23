@@ -40,3 +40,8 @@ run = "npm --prefix editors/vscode run test"
 [tasks.vscode-ci]
 description = "Run VS Code extension compile + tests"
 depends = ["vscode-compile", "vscode-test"]
+
+[tasks.vscode-install-extension]
+description = "Compile and install VS Code extension"
+depends = ["vscode-compile"]
+run = "npm --prefix editors/vscode run package && code --install-extension editors/vscode/thrift-weaver-vscode-0.0.1.vsix --force"
