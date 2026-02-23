@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kpumuk/thrift-weaver/internal/syntax"
 )
 
 func TestRunRejectsInvalidFlagCombos(t *testing.T) {
@@ -76,6 +78,15 @@ func TestRunReturnsUnsafeExitCodeAndDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "unterminated string literal") {
 		t.Fatalf("stderr missing diagnostic: %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), "E: lexer/LEX_UNTERMINATED_STRING:") {
+		t.Fatalf("stderr missing formatted diagnostic header: %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), "const string X = 'unterminated") {
+		t.Fatalf("stderr missing diagnostic source snippet: %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), "^") {
+		t.Fatalf("stderr missing caret indicator: %q", errb.String())
 	}
 }
 
@@ -168,5 +179,54 @@ func TestParseRangeFlag(t *testing.T) {
 
 	if _, err := parseRangeFlag("bad"); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDiagnosticDisplayTextHumanizesInternalAlignment(t *testing.T) {
+	t.Parallel()
+
+	d := syntax.Diagnostic{
+		Source:  "parser",
+		Code:    syntax.DiagnosticInternalAlignment,
+		Message: "node span [192,275) does not cover any lexer token",
+	}
+
+	msg, details := diagnosticDisplayText(d)
+	if !strings.Contains(msg, "cannot safely format") {
+		t.Fatalf("message should be humanized, got %q", msg)
+	}
+	if len(details) == 0 {
+		t.Fatal("expected debug detail lines")
+	}
+	if !strings.Contains(details[0], "node span [192,275)") {
+		t.Fatalf("raw diagnostic details should be preserved, got %q", details[0])
+	}
+}
+
+func TestDiagnosticDisplayTextHumanizesParserRecoveryDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	msg, details := diagnosticDisplayText(syntax.Diagnostic{
+		Source:  "parser",
+		Code:    syntax.DiagnosticParserErrorNode,
+		Message: "syntax error",
+	})
+	if msg != "thrift syntax error: could not parse this section" {
+		t.Fatalf("unexpected parser error message: %q", msg)
+	}
+	if len(details) != 0 {
+		t.Fatalf("unexpected parser error details: %#v", details)
+	}
+
+	msg, details = diagnosticDisplayText(syntax.Diagnostic{
+		Source:  "parser",
+		Code:    syntax.DiagnosticParserMissingNode,
+		Message: "missing }",
+	})
+	if msg != "thrift syntax error: expected }" {
+		t.Fatalf("unexpected parser missing message: %q", msg)
+	}
+	if len(details) != 0 {
+		t.Fatalf("unexpected parser missing details: %#v", details)
 	}
 }

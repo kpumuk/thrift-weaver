@@ -234,18 +234,182 @@ func writeDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnostic)
 		li = tree.LineIndex
 		uri = tree.URI
 	}
-	for _, d := range diags {
-		loc := d.Span.String()
-		if li != nil && d.Span.Start.IsValid() {
-			if p, err := li.OffsetToPoint(d.Span.Start); err == nil {
-				loc = fmt.Sprintf("%d:%d", p.Line+1, p.Column+1)
-			}
+	for i, d := range diags {
+		if i > 0 {
+			writeln(w)
 		}
 		prefix := "thriftfmt"
 		if uri != "" {
 			prefix = uri
 		}
-		writef(w, "%s:%s: %s (%s/%s)\n", prefix, loc, d.Message, d.Source, d.Code)
+		writeDiagnosticHeader(w, prefix, li, d)
+		writeDiagnosticSnippet(w, tree, li, d)
+	}
+}
+
+func writeDiagnosticHeader(w io.Writer, prefix string, li *text.LineIndex, d syntax.Diagnostic) {
+	loc := d.Span.String()
+	if li != nil && d.Span.Start.IsValid() {
+		if p, err := li.OffsetToPoint(d.Span.Start); err == nil {
+			loc = fmt.Sprintf("%d:%d", p.Line+1, p.Column+1)
+		}
+	}
+	msg, detailLines := diagnosticDisplayText(d)
+	writef(
+		w,
+		"%s:%s: %s: %s/%s: %s\n",
+		prefix,
+		loc,
+		diagnosticSeverityLetter(d.Severity),
+		d.Source,
+		d.Code,
+		msg,
+	)
+	for _, line := range detailLines {
+		writef(w, "  %s\n", line)
+	}
+}
+
+func writeDiagnosticSnippet(w io.Writer, tree *syntax.Tree, li *text.LineIndex, d syntax.Diagnostic) {
+	if tree == nil || li == nil || !d.Span.Start.IsValid() {
+		return
+	}
+
+	startPoint, err := li.OffsetToPoint(d.Span.Start)
+	if err != nil {
+		return
+	}
+	lineStart, lineText, ok := sourceLineAt(tree.Source, d.Span.Start)
+	if !ok {
+		return
+	}
+
+	startCol := min(max(int(d.Span.Start-lineStart), 0), len(lineText))
+
+	caretWidth := diagnosticCaretWidth(li, d, startPoint.Line, len(lineText), lineStart)
+	caretPrefix := caretPrefixForLine(lineText, startCol)
+
+	writeln(w, string(lineText))
+	writeString(w, caretPrefix)
+	writeString(w, strings.Repeat("^", caretWidth))
+	writeln(w)
+}
+
+func diagnosticCaretWidth(li *text.LineIndex, d syntax.Diagnostic, startLine int, lineLen int, lineStart text.ByteOffset) int {
+	if lineLen == 0 {
+		return 1
+	}
+	if !d.Span.End.IsValid() || d.Span.End <= d.Span.Start {
+		return 1
+	}
+
+	end := min(d.Span.End, li.SourceLen())
+
+	endPoint, err := li.OffsetToPoint(end)
+	if err != nil {
+		return 1
+	}
+
+	startCol := min(max(int(d.Span.Start-lineStart), 0), lineLen)
+
+	if endPoint.Line != startLine {
+		if startCol >= lineLen {
+			return 1
+		}
+		return lineLen - startCol
+	}
+
+	endCol := endPoint.Column
+	if endCol < startCol {
+		return 1
+	}
+	if endCol > lineLen {
+		endCol = lineLen
+	}
+	if endCol == startCol {
+		return 1
+	}
+	return endCol - startCol
+}
+
+func sourceLineAt(src []byte, off text.ByteOffset) (text.ByteOffset, []byte, bool) {
+	if !off.IsValid() {
+		return 0, nil, false
+	}
+	i := int(off)
+	if i < 0 || i > len(src) {
+		return 0, nil, false
+	}
+
+	start := i
+	for start > 0 && src[start-1] != '\n' {
+		start--
+	}
+
+	end := i
+	for end < len(src) && src[end] != '\n' {
+		end++
+	}
+	if end > start && src[end-1] == '\r' {
+		end--
+	}
+
+	return text.ByteOffset(start), src[start:end], true
+}
+
+func caretPrefixForLine(line []byte, col int) string {
+	if col <= 0 {
+		return ""
+	}
+	if col > len(line) {
+		col = len(line)
+	}
+
+	var b strings.Builder
+	b.Grow(col)
+	for _, ch := range line[:col] {
+		if ch == '\t' {
+			b.WriteByte('\t')
+			continue
+		}
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+func diagnosticSeverityLetter(s syntax.Severity) string {
+	switch s {
+	case syntax.SeverityError:
+		return "E"
+	case syntax.SeverityWarning:
+		return "W"
+	case syntax.SeverityInfo:
+		return "I"
+	default:
+		return "E"
+	}
+}
+
+func diagnosticDisplayText(d syntax.Diagnostic) (message string, detailLines []string) {
+	switch d.Code {
+	case syntax.DiagnosticInternalAlignment:
+		return "thriftfmt cannot safely format this code because the parser and lexer views do not align (internal error)", []string{
+			fmt.Sprintf("debug details: %s/%s: %s", d.Source, d.Code, d.Message),
+			"please report this input; include --debug-tokens and --debug-cst output if possible",
+		}
+	case syntax.DiagnosticInternalParse:
+		return "thriftfmt hit an internal parser error and cannot safely format this code", []string{
+			fmt.Sprintf("debug details: %s/%s: %s", d.Source, d.Code, d.Message),
+		}
+	case syntax.DiagnosticParserErrorNode:
+		return "thrift syntax error: could not parse this section", nil
+	case syntax.DiagnosticParserMissingNode:
+		if missing, ok := strings.CutPrefix(d.Message, "missing "); ok && missing != "" {
+			return "thrift syntax error: expected " + missing, nil
+		}
+		return "thrift syntax error: missing required syntax", nil
+	default:
+		return d.Message, nil
 	}
 }
 
@@ -328,10 +492,12 @@ func writef(w io.Writer, format string, args ...any) {
 }
 
 func writeln(w io.Writer, args ...any) {
+	//nolint:gosec // Terminal/debug output helper.
 	_, _ = fmt.Fprintln(w, args...)
 }
 
 func writeString(w io.Writer, s string) {
+	//nolint:gosec // Terminal/debug output helper.
 	_, _ = io.WriteString(w, s)
 }
 
