@@ -113,6 +113,22 @@ type DidCloseParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
 
+// PublishDiagnosticsParams is the LSP publishDiagnostics notification payload.
+type PublishDiagnosticsParams struct {
+	URI         string       `json:"uri"`
+	Version     *int32       `json:"version,omitempty"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+// Diagnostic is a minimal LSP diagnostic payload.
+type Diagnostic struct {
+	Range    Range  `json:"range"`
+	Severity int    `json:"severity,omitempty"`
+	Code     string `json:"code,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Message  string `json:"message"`
+}
+
 // FormattingOptions is the LSP formatting options subset used in v1.
 type FormattingOptions struct {
 	TabSize      int  `json:"tabSize,omitempty"`
@@ -122,12 +138,14 @@ type FormattingOptions struct {
 // DocumentFormattingParams is the LSP document formatting request payload.
 type DocumentFormattingParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Version      *int32                 `json:"version,omitempty"` // non-standard extension for stale-request tests/guards
 	Options      FormattingOptions      `json:"options"`
 }
 
 // DocumentRangeFormattingParams is the LSP range formatting request payload.
 type DocumentRangeFormattingParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Version      *int32                 `json:"version,omitempty"` // non-standard extension for stale-request tests/guards
 	Range        Range                  `json:"range"`
 	Options      FormattingOptions      `json:"options"`
 }

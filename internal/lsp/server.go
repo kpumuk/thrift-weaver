@@ -9,6 +9,10 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	fmtengine "github.com/kpumuk/thrift-weaver/internal/format"
+	"github.com/kpumuk/thrift-weaver/internal/syntax"
+	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
 
 // Server is a thrift LSP server with an in-memory snapshot store.
@@ -135,6 +139,9 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		if err := s.DidOpen(ctx, p); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
+		if err := s.publishDiagnosticsForURI(w, p.TextDocument.URI); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
 		return nil
 	case "textDocument/didChange":
 		var p DidChangeParams
@@ -153,6 +160,9 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 			}
 			return writeErr(code, err.Error())
 		}
+		if err := s.publishDiagnosticsForURI(w, p.TextDocument.URI); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
 		return nil
 	case "textDocument/didClose":
 		var p DidCloseParams
@@ -160,6 +170,9 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 			return writeErr(jsonRPCInvalidParams, err.Error())
 		}
 		if err := s.DidClose(ctx, p); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
+		if err := s.publishClearedDiagnostics(w, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		return nil
@@ -170,7 +183,7 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		}
 		edits, err := s.Formatting(ctx, p)
 		if err != nil {
-			return writeErr(lspErrorRequestFailed, err.Error())
+			return writeErr(lspErrorCodeForFormatting(err), err.Error())
 		}
 		return writeResp(edits)
 	case "textDocument/rangeFormatting":
@@ -180,7 +193,7 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		}
 		edits, err := s.RangeFormatting(ctx, p)
 		if err != nil {
-			return writeErr(lspErrorRequestFailed, err.Error())
+			return writeErr(lspErrorCodeForFormatting(err), err.Error())
 		}
 		return writeResp(edits)
 	case "textDocument/documentSymbol":
@@ -278,18 +291,44 @@ func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
 	return nil
 }
 
-// Formatting is a Track B placeholder that returns a valid empty result in Track A.
+// Formatting handles textDocument/formatting.
 func (s *Server) Formatting(ctx context.Context, p DocumentFormattingParams) ([]TextEdit, error) {
-	_ = ctx
-	_ = p
-	return []TextEdit{}, nil
+	snap, err := s.formattingSnapshot(p.TextDocument.URI, p.Version)
+	if err != nil {
+		return nil, err
+	}
+	res, err := fmtengine.Document(ctx, snap.Tree, formattingOptionsFromLSP(p.Options))
+	if err != nil {
+		return nil, err
+	}
+	if !res.Changed {
+		return []TextEdit{}, nil
+	}
+	fullRange, err := fullDocumentRange(snap.Tree.LineIndex)
+	if err != nil {
+		return nil, err
+	}
+	return []TextEdit{{
+		Range:   fullRange,
+		NewText: string(res.Output),
+	}}, nil
 }
 
-// RangeFormatting is a Track B placeholder that returns a valid empty result in Track A.
+// RangeFormatting handles textDocument/rangeFormatting.
 func (s *Server) RangeFormatting(ctx context.Context, p DocumentRangeFormattingParams) ([]TextEdit, error) {
-	_ = ctx
-	_ = p
-	return []TextEdit{}, nil
+	snap, err := s.formattingSnapshot(p.TextDocument.URI, p.Version)
+	if err != nil {
+		return nil, err
+	}
+	byteRange, err := byteSpanFromLSPRange(snap.Tree.LineIndex, p.Range)
+	if err != nil {
+		return nil, err
+	}
+	res, err := fmtengine.Range(ctx, snap.Tree, byteRange, formattingOptionsFromLSP(p.Options))
+	if err != nil {
+		return nil, err
+	}
+	return lspTextEditsFromByteEdits(snap.Tree.LineIndex, res.Edits)
 }
 
 // DocumentSymbol is a Track C placeholder that returns a valid empty result in Track A.
@@ -334,6 +373,211 @@ func (s *Server) requireStore() (*SnapshotStore, error) {
 		return nil, errors.New("nil Server")
 	}
 	return s.store, nil
+}
+
+func (s *Server) formattingSnapshot(uri string, version *int32) (*Snapshot, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, err
+	}
+	if version != nil {
+		return store.SnapshotAtVersion(uri, *version)
+	}
+	snap, ok := store.Snapshot(uri)
+	if !ok {
+		return nil, ErrDocumentNotOpen
+	}
+	return snap, nil
+}
+
+func (s *Server) publishDiagnosticsForURI(w *bufio.Writer, uri string) error {
+	store, err := s.requireStore()
+	if err != nil {
+		return err
+	}
+	snap, ok := store.Snapshot(uri)
+	if !ok {
+		return nil
+	}
+	diags, err := lspDiagnosticsFromSyntax(snap.Tree)
+	if err != nil {
+		return err
+	}
+	version := snap.Version
+	return s.writeNotification(w, "textDocument/publishDiagnostics", PublishDiagnosticsParams{
+		URI:         uri,
+		Version:     &version,
+		Diagnostics: diags,
+	})
+}
+
+func (s *Server) publishClearedDiagnostics(w *bufio.Writer, uri string) error {
+	return s.writeNotification(w, "textDocument/publishDiagnostics", PublishDiagnosticsParams{
+		URI:         uri,
+		Diagnostics: []Diagnostic{},
+	})
+}
+
+func (s *Server) writeNotification(w *bufio.Writer, method string, params any) error {
+	body, err := json.Marshal(struct {
+		JSONRPC string `json:"jsonrpc"`
+		Method  string `json:"method"`
+		Params  any    `json:"params,omitempty"`
+	}{
+		JSONRPC: JSONRPCVersion,
+		Method:  method,
+		Params:  params,
+	})
+	if err != nil {
+		return err
+	}
+	return writeFramedMessage(w, body)
+}
+
+func formattingOptionsFromLSP(in FormattingOptions) fmtengine.Options {
+	opts := fmtengine.Options{}
+	if in.InsertSpaces && in.TabSize > 0 {
+		opts.Indent = strings.Repeat(" ", in.TabSize)
+	}
+	return opts
+}
+
+func fullDocumentRange(li *itext.LineIndex) (Range, error) {
+	if li == nil {
+		return Range{}, errors.New("nil line index")
+	}
+	end, err := li.OffsetToUTF16Position(li.SourceLen())
+	if err != nil {
+		return Range{}, err
+	}
+	return Range{
+		Start: Position{Line: 0, Character: 0},
+		End:   Position{Line: end.Line, Character: end.Character},
+	}, nil
+}
+
+func byteSpanFromLSPRange(li *itext.LineIndex, r Range) (itext.Span, error) {
+	if li == nil {
+		return itext.Span{}, errors.New("nil line index")
+	}
+	start, err := li.UTF16PositionToOffset(itext.UTF16Position{Line: r.Start.Line, Character: r.Start.Character})
+	if err != nil {
+		return itext.Span{}, fmt.Errorf("range start: %w", err)
+	}
+	end, err := li.UTF16PositionToOffset(itext.UTF16Position{Line: r.End.Line, Character: r.End.Character})
+	if err != nil {
+		return itext.Span{}, fmt.Errorf("range end: %w", err)
+	}
+	return itext.NewSpan(start, end)
+}
+
+func lspTextEditsFromByteEdits(li *itext.LineIndex, edits []itext.ByteEdit) ([]TextEdit, error) {
+	if len(edits) == 0 {
+		return []TextEdit{}, nil
+	}
+	out := make([]TextEdit, 0, len(edits))
+	for _, e := range edits {
+		rng, err := lspRangeFromSpan(li, e.Span)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, TextEdit{
+			Range:   rng,
+			NewText: string(e.NewText),
+		})
+	}
+	return out, nil
+}
+
+func lspDiagnosticsFromSyntax(tree *syntax.Tree) ([]Diagnostic, error) {
+	if tree == nil {
+		return nil, errors.New("nil syntax tree")
+	}
+	li := tree.LineIndex
+	if li == nil {
+		li = itext.NewLineIndex(tree.Source)
+	}
+	out := make([]Diagnostic, 0, len(tree.Diagnostics))
+	for _, d := range tree.Diagnostics {
+		rng, err := lspRangeFromSpan(li, d.Span)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Diagnostic{
+			Range:    rng,
+			Severity: lspSeverity(d.Severity),
+			Code:     string(d.Code),
+			Source:   d.Source,
+			Message:  d.Message,
+		})
+	}
+	return out, nil
+}
+
+func lspRangeFromSpan(li *itext.LineIndex, sp itext.Span) (Range, error) {
+	if li == nil {
+		return Range{}, errors.New("nil line index")
+	}
+	clamped := clampSpanToSource(sp, li.SourceLen())
+	start, err := li.OffsetToUTF16Position(clamped.Start)
+	if err != nil {
+		return Range{}, err
+	}
+	end, err := li.OffsetToUTF16Position(clamped.End)
+	if err != nil {
+		return Range{}, err
+	}
+	return Range{
+		Start: Position{Line: start.Line, Character: start.Character},
+		End:   Position{Line: end.Line, Character: end.Character},
+	}, nil
+}
+
+func clampSpanToSource(sp itext.Span, srcLen itext.ByteOffset) itext.Span {
+	if !sp.Start.IsValid() {
+		sp.Start = 0
+	}
+	if !sp.End.IsValid() {
+		sp.End = sp.Start
+	}
+	if sp.Start > srcLen {
+		sp.Start = srcLen
+	}
+	if sp.End > srcLen {
+		sp.End = srcLen
+	}
+	if sp.End < sp.Start {
+		sp.End = sp.Start
+	}
+	return sp
+}
+
+func lspSeverity(sev syntax.Severity) int {
+	switch sev {
+	case syntax.SeverityError:
+		return 1
+	case syntax.SeverityWarning:
+		return 2
+	case syntax.SeverityInfo:
+		return 3
+	default:
+		return 1
+	}
+}
+
+func lspErrorCodeForFormatting(err error) int {
+	switch {
+	case errors.Is(err, ErrStaleVersion):
+		return lspErrorContentModified
+	case errors.Is(err, ErrDocumentNotOpen):
+		return jsonRPCInvalidParams
+	case errors.Is(err, context.Canceled):
+		return lspErrorRequestCancelled
+	case fmtengine.IsErrUnsafeToFormat(err):
+		return lspErrorRequestFailed
+	default:
+		return jsonRPCInternalError
+	}
 }
 
 func readFramedMessage(r *bufio.Reader) ([]byte, error) {
