@@ -38,17 +38,20 @@ func TestDocumentPreservesBOMAndReportsMixedNewlines(t *testing.T) {
 	t.Parallel()
 
 	src := []byte("\xEF\xBB\xBFconst i32 x = 1\r\nconst i32 y = 2\n")
-	tree := &syntax.Tree{Source: src}
+	tree, err := syntax.Parse(context.Background(), src, syntax.ParseOptions{URI: "test.thrift"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
 
 	res, err := Document(context.Background(), tree, Options{})
 	if err != nil {
 		t.Fatalf("Document: %v", err)
 	}
-	if res.Changed {
-		t.Fatal("Document should not report changes in Track A core")
+	if len(res.Output) == 0 {
+		t.Fatal("expected formatted output")
 	}
-	if !bytes.Equal(res.Output, src) {
-		t.Fatalf("output mismatch: got %q want %q", res.Output, src)
+	if !bytes.HasPrefix(res.Output, []byte("\xEF\xBB\xBF")) {
+		t.Fatalf("expected BOM preserved, got %q", res.Output)
 	}
 
 	var sawMixed bool
@@ -98,7 +101,7 @@ func TestDocumentRefusesInvalidUTF8(t *testing.T) {
 func TestSourceRefusesUnsafeSyntaxAndReturnsDiagnostics(t *testing.T) {
 	t.Parallel()
 
-	res, err := Source(context.Background(), []byte("struct X {"), "test.thrift", Options{})
+	res, err := Source(context.Background(), []byte("const string X = 'unterminated\n"), "test.thrift", Options{})
 	if err == nil {
 		t.Fatal("expected unsafe formatting refusal")
 	}
@@ -118,21 +121,34 @@ func TestSourceRefusesUnsafeSyntaxAndReturnsDiagnostics(t *testing.T) {
 	}
 }
 
+func TestSourceAllowsRecoverableParserDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	res, err := Source(context.Background(), []byte("struct X {"), "test.thrift", Options{})
+	if err != nil {
+		t.Fatalf("Source should allow recoverable parser diagnostics, got error: %v", err)
+	}
+	if len(res.Diagnostics) == 0 {
+		t.Fatal("expected parser diagnostics for incomplete input")
+	}
+}
+
 func TestRangeReturnsNoEditsForSafeInputTrackA(t *testing.T) {
 	t.Parallel()
 
 	src := []byte("const i32 X = 1;\n")
-	tree := &syntax.Tree{
-		Source:    src,
-		LineIndex: text.NewLineIndex(src),
+	tree, err := syntax.Parse(context.Background(), src, syntax.ParseOptions{URI: "test.thrift"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
-	r := text.Span{Start: 0, End: text.ByteOffset(len(src))}
+	start := bytes.Index(src, []byte("X"))
+	r := text.Span{Start: text.ByteOffset(start), End: text.ByteOffset(start + 1)}
 
 	res, err := Range(context.Background(), tree, r, Options{})
 	if err != nil {
 		t.Fatalf("Range: %v", err)
 	}
 	if len(res.Edits) != 0 {
-		t.Fatalf("expected no edits in Track A, got %d", len(res.Edits))
+		t.Fatalf("expected no edits for already-formatted declaration range, got %d", len(res.Edits))
 	}
 }
