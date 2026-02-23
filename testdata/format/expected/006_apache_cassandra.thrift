@@ -87,12 +87,12 @@ struct SuperColumn {
 
 struct CounterColumn {
   1: required binary name,
-  2: required i64 value
+  2: required i64 value,
 }
 
 struct CounterSuperColumn {
   1: required binary name,
-  2: required list<CounterColumn> columns
+  2: required list<CounterColumn> columns,
 }
 
 /**
@@ -114,7 +114,7 @@ struct ColumnOrSuperColumn {
   1: optional Column column,
   2: optional SuperColumn super_column,
   3: optional CounterColumn counter_column,
-  4: optional CounterSuperColumn counter_super_column
+  4: optional CounterSuperColumn counter_super_column,
 }
 
 #
@@ -129,7 +129,7 @@ exception NotFoundException {}
     why contains an associated error message.
 */
 exception InvalidRequestException {
-  1: required string why
+  1: required string why,
 }
 
 /** Not all the replicas required could be created and/or read. */
@@ -143,29 +143,29 @@ exception TimedOutException {
      * replies will be given here. In case of atomic_batch_mutate method this field
      * will be set to -1 if the batch was written to the batchlog and to 0 if it wasn't.
      */
-  1: optional i32 acknowledged_by
+  1: optional i32 acknowledged_by,
 
   /** 
      * in case of atomic_batch_mutate method this field tells if the batch 
      * was written to the batchlog.  
      */
-  2: optional bool acknowledged_by_batchlog
+  2: optional bool acknowledged_by_batchlog,
 
   /** 
      * for the CAS method, this field tells if we timed out during the paxos
      * protocol, as opposed to during the commit of our update
      */
-  3: optional bool paxos_in_progress
+  3: optional bool paxos_in_progress,
 }
 
 /** invalid authentication request (invalid keyspace, user does not exist, or credentials invalid) */
 exception AuthenticationException {
-  1: required string why
+  1: required string why,
 }
 
 /** invalid authorization request (user does not have access to keyspace) */
 exception AuthorizationException {
-  1: required string why
+  1: required string why,
 }
 
 /**
@@ -340,7 +340,7 @@ struct KeyRange {
   3: optional string start_token,
   4: optional string end_token,
   6: optional list<IndexExpression> row_filter,
-  5: required i32 count = 100
+  5: required i32 count = 100,
 }
 
 /**
@@ -357,7 +357,7 @@ struct KeySlice {
 
 struct KeyCount {
   1: required binary key,
-  2: required i32 count
+  2: required i32 count,
 }
 
 /**
@@ -382,7 +382,7 @@ struct Mutation {
 struct EndpointDetails {
   1: string host,
   2: string datacenter,
-  3: optional string rack
+  3: optional string rack,
 }
 
 struct CASResult {
@@ -402,7 +402,7 @@ struct TokenRange {
   1: required string start_token,
   2: required string end_token,
   3: required list<string> endpoints,
-  4: optional list<string> rpc_endpoints
+  4: optional list<string> rpc_endpoints,
   5: optional list<EndpointDetails> endpoint_details,
 }
 
@@ -410,7 +410,7 @@ struct TokenRange {
     Authentication requests can contain any data, dependent on the IAuthenticator used
 */
 struct AuthenticationRequest {
-  1: required map<string, string> credentials
+  1: required map<string, string> credentials,
 }
 
 enum IndexType {
@@ -425,7 +425,7 @@ struct ColumnDef {
   2: required string validation_class,
   3: optional IndexType index_type,
   4: optional string index_name,
-  5: optional map<string, string> index_options
+  5: optional map<string, string> index_options,
 }
 
 /**
@@ -435,7 +435,7 @@ struct ColumnDef {
 */
 struct TriggerDef {
   1: required string name,
-  2: required map<string, string> options
+  2: required map<string, string> options,
 }
 
 /* describes a column family. */
@@ -533,35 +533,35 @@ enum CqlResultType {
 */
 struct CqlRow {
   1: required binary key,
-  2: required list<Column> columns
+  2: required list<Column> columns,
 }
 
 struct CqlMetadata {
   1: required map<binary, string> name_types,
   2: required map<binary, string> value_types,
   3: required string default_name_type,
-  4: required string default_value_type
+  4: required string default_value_type,
 }
 
 struct CqlResult {
   1: required CqlResultType type,
   2: optional list<CqlRow> rows,
   3: optional i32 num,
-  4: optional CqlMetadata schema
+  4: optional CqlMetadata schema,
 }
 
 struct CqlPreparedResult {
   1: required i32 itemId,
   2: required i32 count,
   3: optional list<string> variable_types,
-  4: optional list<string> variable_names
+  4: optional list<string> variable_names,
 }
 
 /** Represents input splits used by hadoop ColumnFamilyRecordReaders */
 struct CfSplit {
   1: required string start_token,
   2: required string end_token,
-  3: required i64 row_count
+  3: required i64 row_count,
 }
 
 /** The ColumnSlice is used to select a set of columns from inside a row. 
@@ -572,7 +572,7 @@ struct CfSplit {
  */
 struct ColumnSlice {
   1: optional binary start,
-  2: optional binary finish
+  2: optional binary finish,
 }
 
 /**
@@ -590,16 +590,16 @@ struct MultiSliceRequest {
   3: optional list<ColumnSlice> column_slices,
   4: optional bool reversed = false,
   5: optional i32 count = 1000,
-  6: optional ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+  6: optional ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
 }
 
 service Cassandra {
   # auth methods
   void login(
-    1: required AuthenticationRequest auth_request
+    1: required AuthenticationRequest auth_request,
   ) throws(
     1: AuthenticationException authnx,
-    2: AuthorizationException authzx
+    2: AuthorizationException authzx,
   ),
 
   # set keyspace
@@ -614,12 +614,12 @@ service Cassandra {
   ColumnOrSuperColumn get(
     1: required binary key,
     2: required ColumnPath column_path,
-    3: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    3: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: NotFoundException nfe,
     3: UnavailableException ue,
-    4: TimedOutException te
+    4: TimedOutException te,
   ),
 
   /**
@@ -630,11 +630,11 @@ service Cassandra {
     1: required binary key,
     2: required ColumnParent column_parent,
     3: required SlicePredicate predicate,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -645,11 +645,11 @@ service Cassandra {
     1: required binary key,
     2: required ColumnParent column_parent,
     3: required SlicePredicate predicate,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -659,11 +659,11 @@ service Cassandra {
     1: required list<binary> keys,
     2: required ColumnParent column_parent,
     3: required SlicePredicate predicate,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -673,11 +673,11 @@ service Cassandra {
     1: required list<binary> keys,
     2: required ColumnParent column_parent,
     3: required SlicePredicate predicate,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -687,11 +687,11 @@ service Cassandra {
     1: required ColumnParent column_parent,
     2: required SlicePredicate predicate,
     3: required KeyRange range,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -701,11 +701,11 @@ service Cassandra {
     1: required string column_family,
     2: required KeyRange range,
     3: required binary start_column,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -716,11 +716,11 @@ service Cassandra {
     1: required ColumnParent column_parent,
     2: required IndexClause index_clause,
     3: required SlicePredicate column_predicate,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   # modification methods
@@ -732,11 +732,11 @@ service Cassandra {
     1: required binary key,
     2: required ColumnParent column_parent,
     3: required Column column,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -746,11 +746,11 @@ service Cassandra {
     1: required binary key,
     2: required ColumnParent column_parent,
     3: required CounterColumn column,
-    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -775,11 +775,11 @@ service Cassandra {
     3: list<Column> expected,
     4: list<Column> updates,
     5: required ConsistencyLevel serial_consistency_level = ConsistencyLevel.SERIAL,
-    6: required ConsistencyLevel commit_consistency_level = ConsistencyLevel.QUORUM
+    6: required ConsistencyLevel commit_consistency_level = ConsistencyLevel.QUORUM,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -791,11 +791,11 @@ service Cassandra {
     1: required binary key,
     2: required ColumnPath column_path,
     3: required i64 timestamp,
-    4: ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    4: ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -806,11 +806,11 @@ service Cassandra {
   void remove_counter(
     1: required binary key,
     2: required ColumnPath path,
-    3: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    3: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -820,11 +820,11 @@ service Cassandra {
   **/
   void batch_mutate(
     1: required map<binary, map<string, list<Mutation>>> mutation_map,
-    2: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    2: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -834,11 +834,11 @@ service Cassandra {
   **/
   void atomic_batch_mutate(
     1: required map<binary, map<string, list<Mutation>>> mutation_map,
-    2: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE
+    2: required ConsistencyLevel consistency_level = ConsistencyLevel.ONE,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
@@ -850,22 +850,22 @@ service Cassandra {
    some hosts are down.
   */
   void truncate(
-    1: required string cfname
+    1: required string cfname,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   /**
   * Select multiple slices of a key in a single RPC operation
   */
   list<ColumnOrSuperColumn> get_multi_slice(
-    1: required MultiSliceRequest request
+    1: required MultiSliceRequest request,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
-    3: TimedOutException te
+    3: TimedOutException te,
   ),
 
   // Meta-APIs -- APIs to get information about the node or cluster,
@@ -896,16 +896,16 @@ service Cassandra {
       for the same reason, we can't return a set here, even though
       order is neither important nor predictable. */
   list<TokenRange> describe_ring(
-    1: required string keyspace
+    1: required string keyspace,
   ) throws(
-    1: InvalidRequestException ire
+    1: InvalidRequestException ire,
   ),
 
   /** same as describe_ring, but considers only nodes in the local DC */
   list<TokenRange> describe_local_ring(
-    1: required string keyspace
+    1: required string keyspace,
   ) throws(
-    1: InvalidRequestException ire
+    1: InvalidRequestException ire,
   ),
 
   /** get the mapping between token->node ip
@@ -921,10 +921,10 @@ service Cassandra {
 
   /** describe specified keyspace */
   KsDef describe_keyspace(
-    1: required string keyspace
+    1: required string keyspace,
   ) throws(
     1: NotFoundException nfe,
-    2: InvalidRequestException ire
+    2: InvalidRequestException ire,
   ),
 
   /** experimental API for hadoop/parallel query support.  
@@ -936,9 +936,9 @@ service Cassandra {
     1: required string cfName,
     2: required string start_token,
     3: required string end_token,
-    4: required i32 keys_per_split
+    4: required i32 keys_per_split,
   ) throws(
-    1: InvalidRequestException ire
+    1: InvalidRequestException ire,
   ),
 
   /** Enables tracing for the next query in this connection and returns the UUID for that trace session
@@ -948,57 +948,57 @@ service Cassandra {
     1: required string cfName,
     2: required string start_token,
     3: required string end_token,
-    4: required i32 keys_per_split
+    4: required i32 keys_per_split,
   ) throws(
-    1: InvalidRequestException ire
+    1: InvalidRequestException ire,
   ),
 
   /** adds a column family. returns the new schema id. */
   string system_add_column_family(
-    1: required CfDef cf_def
+    1: required CfDef cf_def,
   ) throws(
     1: InvalidRequestException ire,
-    2: SchemaDisagreementException sde
+    2: SchemaDisagreementException sde,
   ),
 
   /** drops a column family. returns the new schema id. */
   string system_drop_column_family(
-    1: required string column_family
+    1: required string column_family,
   ) throws(
     1: InvalidRequestException ire,
-    2: SchemaDisagreementException sde
+    2: SchemaDisagreementException sde,
   ),
 
   /** adds a keyspace and any column families that are part of it. returns the new schema id. */
   string system_add_keyspace(
-    1: required KsDef ks_def
+    1: required KsDef ks_def,
   ) throws(
     1: InvalidRequestException ire,
-    2: SchemaDisagreementException sde
+    2: SchemaDisagreementException sde,
   ),
 
   /** drops a keyspace and any column families that are part of it. returns the new schema id. */
   string system_drop_keyspace(
-    1: required string keyspace
+    1: required string keyspace,
   ) throws(
     1: InvalidRequestException ire,
-    2: SchemaDisagreementException sde
+    2: SchemaDisagreementException sde,
   ),
 
   /** updates properties of a keyspace. returns the new schema id. */
   string system_update_keyspace(
-    1: required KsDef ks_def
+    1: required KsDef ks_def,
   ) throws(
     1: InvalidRequestException ire,
-    2: SchemaDisagreementException sde
+    2: SchemaDisagreementException sde,
   ),
 
   /** updates properties of a column family. returns the new schema id. */
   string system_update_column_family(
-    1: required CfDef cf_def
+    1: required CfDef cf_def,
   ) throws(
     1: InvalidRequestException ire,
-    2: SchemaDisagreementException sde
+    2: SchemaDisagreementException sde,
   ),
 
   /**
@@ -1006,13 +1006,13 @@ service Cassandra {
    */
   CqlResult execute_cql_query(
     1: required binary query,
-    2: required Compression compression
+    2: required Compression compression,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
     3: TimedOutException te,
-    4: SchemaDisagreementException sde
-  )
+    4: SchemaDisagreementException sde,
+  ),
 
   /**
    * Executes a CQL3 (Cassandra Query Language) statement and returns a
@@ -1021,23 +1021,23 @@ service Cassandra {
   CqlResult execute_cql3_query(
     1: required binary query,
     2: required Compression compression,
-    3: required ConsistencyLevel consistency
+    3: required ConsistencyLevel consistency,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
     3: TimedOutException te,
-    4: SchemaDisagreementException sde
-  )
+    4: SchemaDisagreementException sde,
+  ),
 
   /**
    * @deprecated Throws InvalidRequestException since 2.2. Please use the CQL3 version instead.
    */
   CqlPreparedResult prepare_cql_query(
     1: required binary query,
-    2: required Compression compression
+    2: required Compression compression,
   ) throws(
-    1: InvalidRequestException ire
-  )
+    1: InvalidRequestException ire,
+  ),
 
   /**
    * Prepare a CQL3 (Cassandra Query Language) statement by compiling and returning
@@ -1047,23 +1047,23 @@ service Cassandra {
    */
   CqlPreparedResult prepare_cql3_query(
     1: required binary query,
-    2: required Compression compression
+    2: required Compression compression,
   ) throws(
-    1: InvalidRequestException ire
-  )
+    1: InvalidRequestException ire,
+  ),
 
   /**
    * @deprecated Throws InvalidRequestException since 2.2. Please use the CQL3 version instead.
    */
   CqlResult execute_prepared_cql_query(
     1: required i32 itemId,
-    2: required list<binary> values
+    2: required list<binary> values,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
     3: TimedOutException te,
-    4: SchemaDisagreementException sde
-  )
+    4: SchemaDisagreementException sde,
+  ),
 
   /**
    * Executes a prepared CQL3 (Cassandra Query Language) statement by passing an id token, a list of variables
@@ -1072,16 +1072,16 @@ service Cassandra {
   CqlResult execute_prepared_cql3_query(
     1: required i32 itemId,
     2: required list<binary> values,
-    3: required ConsistencyLevel consistency
+    3: required ConsistencyLevel consistency,
   ) throws(
     1: InvalidRequestException ire,
     2: UnavailableException ue,
     3: TimedOutException te,
-    4: SchemaDisagreementException sde
-  )
+    4: SchemaDisagreementException sde,
+  ),
 
   /**
    * @deprecated This is now a no-op. Please use the CQL3 specific methods instead.
    */
-  void set_cql_version(1: required string version) throws(1: InvalidRequestException ire)
+  void set_cql_version(1: required string version) throws(1: InvalidRequestException ire),
 }

@@ -8,5 +8,5 @@ typedef i32 ID
 typedef map<string, list<i64>> NameIndex
 
 struct Example {
-  1: required ID id;
+  1: required ID id,
 }

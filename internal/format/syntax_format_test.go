@@ -40,13 +40,13 @@ service S { async void ping(1:i32 id,2: string name) ;}
 		`}`,
 		``,
 		`struct Foo {`,
-		`  1: required i32 id;`,
+		`  1: required i32 id,`,
 		`  2: optional string name(ann = 'x'),`,
-		`  3: byte flag = 1;`,
+		`  3: byte flag = 1,`,
 		`}`,
 		``,
 		`service S {`,
-		`  async void ping(1: i32 id, 2: string name);`,
+		`  async void ping(1: i32 id, 2: string name),`,
 		`}`,
 		``,
 	}, "\n")
@@ -155,7 +155,7 @@ func TestSourceServiceFunctionRespectsLineWidth(t *testing.T) {
 		got := string(res.Output)
 		want := strings.Join([]string{
 			`service UpsertIdentityConnection {`,
-			`  UpsertIdentityConnectionResponse upsert_identity_connection(1: UpsertIdentityConnectionRequest request) throws(1: UpsertIdentityConnectionError error)`,
+			`  UpsertIdentityConnectionResponse upsert_identity_connection(1: UpsertIdentityConnectionRequest request) throws(1: UpsertIdentityConnectionError error),`,
 			`}`,
 			``,
 		}, "\n")
@@ -176,10 +176,10 @@ func TestSourceServiceFunctionRespectsLineWidth(t *testing.T) {
 		want := strings.Join([]string{
 			`service UpsertIdentityConnection {`,
 			`  UpsertIdentityConnectionResponse upsert_identity_connection(`,
-			`    1: UpsertIdentityConnectionRequest request`,
+			`    1: UpsertIdentityConnectionRequest request,`,
 			`  ) throws(`,
-			`    1: UpsertIdentityConnectionError error`,
-			`  )`,
+			`    1: UpsertIdentityConnectionError error,`,
+			`  ),`,
 			`}`,
 			``,
 		}, "\n")
@@ -210,13 +210,60 @@ func TestSourceServiceFunctionWithLeadingDocCommentStillWrapsByLineWidth(t *test
 		`  ColumnOrSuperColumn get(`,
 		`    1: binary key,`,
 		`    2: ColumnPath column_path,`,
-		`    3: ConsistencyLevel consistency_level = ConsistencyLevel.ONE`,
+		`    3: ConsistencyLevel consistency_level = ConsistencyLevel.ONE,`,
 		`  ) throws(`,
 		`    1: InvalidRequestException ire,`,
 		`    2: NotFoundException nfe,`,
 		`    3: UnavailableException ue,`,
-		`    4: TimedOutException te`,
+		`    4: TimedOutException te,`,
 		`  ),`,
+		`}`,
+		``,
+	}, "\n")
+	if got != want {
+		t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestSourceCanonicalizesFieldAndMethodTerminatorsToCommas(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`exception E {
+  1: string message;
+  2: string code
+}
+
+struct S {
+  1: string a;
+  2: string b
+}
+
+service Demo {
+  void ping(1: i32 id; 2: i32 n) throws(1: E e; 2: E f);
+  void pong()
+}
+`)
+
+	res, err := Source(context.Background(), src, "test.thrift", Options{})
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+
+	got := string(res.Output)
+	want := strings.Join([]string{
+		`exception E {`,
+		`  1: string message,`,
+		`  2: string code,`,
+		`}`,
+		``,
+		`struct S {`,
+		`  1: string a,`,
+		`  2: string b,`,
+		`}`,
+		``,
+		`service Demo {`,
+		`  void ping(1: i32 id, 2: i32 n) throws(1: E e, 2: E f),`,
+		`  void pong(),`,
 		`}`,
 		``,
 	}, "\n")
@@ -244,10 +291,10 @@ func TestSourceDoesNotInsertExtraBlankLineBeforeFieldCommentBlock(t *testing.T) 
 	got := string(res.Output)
 	want := strings.Join([]string{
 		`struct Tenant {`,
-		`  3: required string primary_value`,
+		`  3: required string primary_value,`,
 		`  # Optional metadata captured during provisioning.`,
 		`  # Persisted in hashed form after initial write.`,
-		`  4: optional string secondary_value`,
+		`  4: optional string secondary_value,`,
 		`}`,
 		``,
 	}, "\n")

@@ -112,7 +112,7 @@ func TestRunWriteUpdatesFileInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if string(got) != "service S {\n  async void ping(1: i32 id);\n}\n" {
+	if string(got) != "service S {\n  async void ping(1: i32 id),\n}\n" {
 		t.Fatalf("formatted file mismatch: %q", got)
 	}
 }

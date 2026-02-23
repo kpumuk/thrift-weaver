@@ -65,7 +65,7 @@ typedef i64 UserId
 
 struct Bonk {
   1: string message,
-  2: i32 type
+  2: i32 type,
 }
 
 typedef map<string, Bonk> MapType
@@ -79,25 +79,25 @@ struct Xtruct {
   1: string string_thing,
   4: i8 byte_thing,
   9: i32 i32_thing,
-  11: i64 i64_thing
+  11: i64 i64_thing,
 }
 
 struct Xtruct2 {
   1: i8 byte_thing, // used to be byte, hence the name
   2: Xtruct struct_thing,
-  3: i32 i32_thing
+  3: i32 i32_thing,
 }
 
 struct Xtruct3 {
   1: string string_thing,
   4: i32 changed,
   9: i32 i32_thing,
-  11: i64 i64_thing
+  11: i64 i64_thing,
 }
 
 struct Insanity {
   1: map<Numberz, UserId> userMap,
-  2: list<Xtruct> xtructs
+  2: list<Xtruct> xtructs,
 } (python.immutable = "")
 
 struct CrazyNesting {
@@ -105,8 +105,8 @@ struct CrazyNesting {
   2: optional set<Insanity> set_field,
   // Do not insert line break as test/go/Makefile.am is removing this line with pattern match
   3: required list<map<set<i32>(python.immutable = ""), map<i32, set<list<map<Insanity, string>(python.immutable = "")>(python.immutable = "")>>>> list_field,
-  4: binary binary_field
-  5: uuid uuid_field
+  4: binary binary_field,
+  5: uuid uuid_field,
 }
 
 union SomeUnion {
@@ -114,23 +114,23 @@ union SomeUnion {
   2: string string_thing,
   3: i32 i32_thing,
   4: Xtruct3 xtruct_thing,
-  5: Insanity insanity_thing
+  5: Insanity insanity_thing,
 }
 
 exception Xception {
   1: i32 errorCode,
-  2: string message
+  2: string message,
 }
 
 exception Xception2 {
   1: i32 errorCode,
-  2: Xtruct struct_thing
+  2: Xtruct struct_thing,
 }
 
 struct EmptyStruct {}
 
 struct OneField {
-  1: EmptyStruct field
+  1: EmptyStruct field,
 }
 
 service ThriftTest {
@@ -294,7 +294,7 @@ service ThriftTest {
     3: i64 arg2,
     4: map<i16, string> arg3,
     5: Numberz arg4,
-    6: UserId arg5
+    6: UserId arg5,
   ),
 
   /**
@@ -316,11 +316,11 @@ service ThriftTest {
    */
   Xtruct testMultiException(
     1: string arg0,
-    2: string arg1
+    2: string arg1,
   ) throws(
     1: Xception err1,
-    2: Xception2 err2
-  )
+    2: Xception2 err2,
+  ),
 
   /**
    * Print 'testOneway(%d): Sleeping...' with secondsToSleep as '%d'
@@ -328,7 +328,7 @@ service ThriftTest {
    * Print 'testOneway(%d): done sleeping!' with secondsToSleep as '%d'
    * @param i32 secondsToSleep - the number of seconds to sleep
    */
-  oneway void testOneway(1: i32 secondsToSleep)
+  oneway void testOneway(1: i32 secondsToSleep),
 }
 
 service SecondService {
@@ -337,13 +337,13 @@ service SecondService {
    * @param string thing - the string to print
    * @return string - returns the string 'thing'
    */
-  string secondtestString(1: string thing)
+  string secondtestString(1: string thing),
 }
 
 struct VersioningTestV1 {
   1: i32 begin_in_both,
   3: string old_string,
-  12: i32 end_in_both
+  12: i32 end_in_both,
 }
 
 struct VersioningTestV2 {
@@ -352,23 +352,23 @@ struct VersioningTestV2 {
   3: i8 newbyte,
   4: i16 newshort,
   5: i64 newlong,
-  6: double newdouble
+  6: double newdouble,
   7: Bonk newstruct,
   8: list<i32> newlist,
   9: set<i32> newset,
   10: map<i32, i32> newmap,
   11: string newstring,
-  12: i32 end_in_both
+  12: i32 end_in_both,
 }
 
 struct ListTypeVersioningV1 {
-  1: list<i32> myints;
-  2: string hello;
+  1: list<i32> myints,
+  2: string hello,
 }
 
 struct ListTypeVersioningV2 {
-  1: list<string> strings;
-  2: string hello;
+  1: list<string> strings,
+  2: string hello,
 }
 
 struct GuessProtocolStruct {
@@ -385,50 +385,50 @@ struct LargeDeltas {
   2000: VersioningTestV2 vertwo2000,
   2500: set<string> a_set2500,
   3000: VersioningTestV2 vertwo3000,
-  4000: list<i32> big_numbers
+  4000: list<i32> big_numbers,
 }
 
 struct NestedListsI32x2 {
-  1: list<list<i32>> integerlist
+  1: list<list<i32>> integerlist,
 }
 
 struct NestedListsI32x3 {
-  1: list<list<list<i32>>> integerlist
+  1: list<list<list<i32>>> integerlist,
 }
 
 struct NestedMixedx2 {
-  1: list<set<i32>> int_set_list
-  2: map<i32, set<string>> map_int_strset
-  3: list<map<i32, set<string>>> map_int_strset_list
+  1: list<set<i32>> int_set_list,
+  2: map<i32, set<string>> map_int_strset,
+  3: list<map<i32, set<string>>> map_int_strset_list,
 }
 
 struct ListBonks {
-  1: list<Bonk> bonk
+  1: list<Bonk> bonk,
 }
 
 struct NestedListsBonk {
-  1: list<list<list<Bonk>>> bonk
+  1: list<list<list<Bonk>>> bonk,
 }
 
 struct BoolTest {
-  1: optional bool b = true;
-  2: optional string s = "true";
+  1: optional bool b = true,
+  2: optional string s = "true",
 }
 
 struct StructA {
-  1: required string s;
+  1: required string s,
 }
 
 struct StructB {
-  1: optional StructA aa;
-  2: required StructA ab;
+  1: optional StructA aa,
+  2: required StructA ab,
 }
 
 struct OptionalSetDefaultTest {
-  1: optional set<string> with_default = ["test"]
+  1: optional set<string> with_default = ["test"],
 }
 
 struct OptionalBinary {
-  1: optional set<binary> bin_set = {}
-  2: optional map<binary, i32> bin_map = {}
+  1: optional set<binary> bin_set = {},
+  2: optional map<binary, i32> bin_map = {},
 }

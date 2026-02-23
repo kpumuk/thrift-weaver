@@ -11,14 +11,17 @@ import (
 )
 
 type formatHints struct {
-	topLevelStart  map[uint32]int
-	topLevelBreaks map[uint32]int
-	memberStart    map[uint32]struct{}
-	wrapListStart  map[uint32]struct{}
-	wrapListOpen   map[uint32]struct{}
-	wrapListClose  map[uint32]struct{}
-	declBlockOpen  map[uint32]declBlockSpec
-	declBlockClose map[uint32]declBlockSpec
+	topLevelStart    map[uint32]int
+	topLevelBreaks   map[uint32]int
+	memberStart      map[uint32]struct{}
+	wrapListStart    map[uint32]struct{}
+	wrapListOpen     map[uint32]struct{}
+	wrapListClose    map[uint32]struct{}
+	declBlockOpen    map[uint32]declBlockSpec
+	declBlockClose   map[uint32]declBlockSpec
+	omitSeparatorTok map[uint32]struct{}
+	forceCommaTok    map[uint32]struct{}
+	insertCommaAfter map[uint32]struct{}
 }
 
 func (h formatHints) topLevelBreakCount(tok uint32) int {
@@ -210,11 +213,21 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			w.requestSpace()
 		}
 
-		raw := tok.Bytes(tree.Source)
-		if raw == nil {
-			return nil, fmt.Errorf("invalid token span %s at index %d", tok.Span, i)
+		if _, omit := hints.omitSeparatorTok[idx]; !omit || !isCommaOrSemiToken(tok.Kind) {
+			raw := tok.Bytes(tree.Source)
+			if raw == nil {
+				return nil, fmt.Errorf("invalid token span %s at index %d", tok.Span, i)
+			}
+			if _, ok := hints.forceCommaTok[idx]; ok && isCommaOrSemiToken(tok.Kind) {
+				raw = []byte(",")
+			}
+			w.writeRaw(indentLevel, raw)
 		}
-		w.writeRaw(indentLevel, raw)
+		insertedComma := false
+		if _, ok := hints.insertCommaAfter[idx]; ok {
+			w.writeRaw(indentLevel, []byte(","))
+			insertedComma = true
+		}
 
 		if spec, ok := hints.declBlockOpen[idx]; ok && spec.HasMembers {
 			indentLevel++
@@ -229,23 +242,94 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			}
 		}
 
-		prevKind = tok.Kind
+		if insertedComma {
+			prevKind = lexer.TokenComma
+		} else {
+			prevKind = tok.Kind
+		}
 		havePrev = true
 	}
 
 	return bytes.Clone(w.finish()), nil
 }
 
+func addCommaTerminatorHint(tree *syntax.Tree, hints *formatHints, parentKind string, member *syntax.Node) {
+	if tree == nil || hints == nil || member == nil {
+		return
+	}
+	if !requiresCommaTerminator(parentKind, syntax.KindName(member.Kind)) {
+		return
+	}
+	if int(member.LastToken) >= len(tree.Tokens) {
+		return
+	}
+	lastKind := tree.Tokens[member.LastToken].Kind
+	if parentKind == "parameter_list" {
+		parent := tree.NodeByID(member.Parent)
+		if parameterListTrailingFieldShouldOmitComma(tree, hints, parent, member) {
+			if isCommaOrSemiToken(lastKind) {
+				hints.omitSeparatorTok[member.LastToken] = struct{}{}
+			}
+			return
+		}
+	}
+
+	if isCommaOrSemiToken(lastKind) {
+		hints.forceCommaTok[member.LastToken] = struct{}{}
+		return
+	}
+	hints.insertCommaAfter[member.LastToken] = struct{}{}
+}
+
+func requiresCommaTerminator(parentKind, memberKind string) bool {
+	switch {
+	case parentKind == "field_block" && memberKind == "field":
+		return true
+	case parentKind == "parameter_list" && memberKind == "field":
+		return true
+	case parentKind == "function_block" && memberKind == "function_definition":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCommaOrSemiToken(kind lexer.TokenKind) bool {
+	return kind == lexer.TokenComma || kind == lexer.TokenSemi
+}
+
+func parameterListTrailingFieldShouldOmitComma(tree *syntax.Tree, hints *formatHints, list *syntax.Node, member *syntax.Node) bool {
+	if tree == nil || hints == nil || list == nil || member == nil {
+		return false
+	}
+	if syntax.KindName(list.Kind) != "parameter_list" {
+		return false
+	}
+	next := member.LastToken + 1
+	if int(next) >= len(tree.Tokens) || tree.Tokens[next].Kind != lexer.TokenRParen {
+		return false
+	}
+	openTok, _, ok := parenListTokenBounds(tree, list)
+	if !ok {
+		return false
+	}
+	_, wrapped := hints.wrapListOpen[openTok]
+	return !wrapped
+}
+
 func collectFormatHints(tree *syntax.Tree, opts Options) formatHints {
 	hints := formatHints{
-		topLevelStart:  make(map[uint32]int),
-		topLevelBreaks: make(map[uint32]int),
-		memberStart:    make(map[uint32]struct{}),
-		wrapListStart:  make(map[uint32]struct{}),
-		wrapListOpen:   make(map[uint32]struct{}),
-		wrapListClose:  make(map[uint32]struct{}),
-		declBlockOpen:  make(map[uint32]declBlockSpec),
-		declBlockClose: make(map[uint32]declBlockSpec),
+		topLevelStart:    make(map[uint32]int),
+		topLevelBreaks:   make(map[uint32]int),
+		memberStart:      make(map[uint32]struct{}),
+		wrapListStart:    make(map[uint32]struct{}),
+		wrapListOpen:     make(map[uint32]struct{}),
+		wrapListClose:    make(map[uint32]struct{}),
+		declBlockOpen:    make(map[uint32]declBlockSpec),
+		declBlockClose:   make(map[uint32]declBlockSpec),
+		omitSeparatorTok: make(map[uint32]struct{}),
+		forceCommaTok:    make(map[uint32]struct{}),
+		insertCommaAfter: make(map[uint32]struct{}),
 	}
 
 	prevTopKind := ""
@@ -278,6 +362,15 @@ func collectFormatHints(tree *syntax.Tree, opts Options) formatHints {
 				addWrappedFunctionSignatureHints(tree, opts, &hints, member)
 			}
 		}
+	}
+
+	for i := 1; i < len(tree.Nodes); i++ {
+		node := &tree.Nodes[i]
+		parentKind := ""
+		if parent := tree.NodeByID(node.Parent); parent != nil {
+			parentKind = syntax.KindName(parent.Kind)
+		}
+		addCommaTerminatorHint(tree, &hints, parentKind, node)
 	}
 
 	for i := 1; i < len(tree.Nodes); i++ {
