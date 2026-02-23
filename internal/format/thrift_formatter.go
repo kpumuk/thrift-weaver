@@ -406,7 +406,7 @@ func flatTokenText(tree *syntax.Tree, first, last uint32) (string, bool) {
 		if tok.Kind == lexer.TokenEOF {
 			break
 		}
-		if triviaHasComment(tok.Leading) {
+		if i != first && triviaHasComment(tok.Leading) {
 			return "", false
 		}
 		if havePrev && shouldInsertSpace(prev, tok.Kind) {

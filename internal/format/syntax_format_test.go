@@ -189,6 +189,42 @@ func TestSourceServiceFunctionRespectsLineWidth(t *testing.T) {
 	})
 }
 
+func TestSourceServiceFunctionWithLeadingDocCommentStillWrapsByLineWidth(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`service Demo {
+  /** docs */
+  ColumnOrSuperColumn get(1: binary key, 2: ColumnPath column_path, 3: ConsistencyLevel consistency_level = ConsistencyLevel.ONE) throws(1: InvalidRequestException ire, 2: NotFoundException nfe, 3: UnavailableException ue, 4: TimedOutException te),
+}
+`)
+
+	res, err := Source(context.Background(), src, "test.thrift", Options{LineWidth: 100})
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+
+	got := string(res.Output)
+	want := strings.Join([]string{
+		`service Demo {`,
+		`  /** docs */`,
+		`  ColumnOrSuperColumn get(`,
+		`    1: binary key,`,
+		`    2: ColumnPath column_path,`,
+		`    3: ConsistencyLevel consistency_level = ConsistencyLevel.ONE`,
+		`  ) throws(`,
+		`    1: InvalidRequestException ire,`,
+		`    2: NotFoundException nfe,`,
+		`    3: UnavailableException ue,`,
+		`    4: TimedOutException te`,
+		`  ),`,
+		`}`,
+		``,
+	}, "\n")
+	if got != want {
+		t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
 func TestSourceDoesNotInsertExtraBlankLineBeforeFieldCommentBlock(t *testing.T) {
 	t.Parallel()
 
