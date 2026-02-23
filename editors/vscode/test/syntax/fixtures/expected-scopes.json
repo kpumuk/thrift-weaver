@@ -1,0 +1,77 @@
+[
+  {
+    "line": 1,
+    "text": "include",
+    "scopeIncludes": ["keyword.control.declaration.thrift"]
+  },
+  {
+    "line": 1,
+    "textContains": "shared.thrift",
+    "scopeIncludes": ["string.quoted.double.thrift"]
+  },
+  {
+    "line": 4,
+    "textContains": "Service docs",
+    "scopeIncludes": ["comment.block.thrift"]
+  },
+  {
+    "line": 5,
+    "text": "service",
+    "scopeIncludes": ["keyword.control.declaration.thrift"]
+  },
+  {
+    "line": 7,
+    "text": "async",
+    "scopeIncludes": ["keyword.control.modifier.thrift"]
+  },
+  {
+    "line": 7,
+    "text": "void",
+    "scopeIncludes": ["storage.type.builtin.thrift"]
+  },
+  {
+    "line": 7,
+    "text": "i32",
+    "scopeIncludes": ["storage.type.builtin.thrift"]
+  },
+  {
+    "line": 7,
+    "text": "throws",
+    "scopeIncludes": ["keyword.control.declaration.thrift"]
+  },
+  {
+    "line": 7,
+    "textContains": "demo",
+    "scopeIncludes": ["string.quoted.double.thrift"]
+  },
+  {
+    "line": 7,
+    "text": "2",
+    "scopeIncludes": ["constant.numeric.integer.thrift"]
+  },
+  {
+    "line": 10,
+    "text": "# hash comment",
+    "scopeIncludes": ["comment.line.number-sign.thrift"]
+  },
+  {
+    "line": 11,
+    "text": "const",
+    "scopeIncludes": ["keyword.control.declaration.thrift"]
+  },
+  {
+    "line": 11,
+    "text": "true",
+    "scopeIncludes": ["constant.language.boolean.thrift"]
+  },
+  {
+    "line": 12,
+    "text": "uuid",
+    "scopeIncludes": ["storage.type.builtin.thrift"]
+  },
+  {
+    "line": 12,
+    "textContains": "00112233-4455-6677-8899-aabbccddeeff",
+    "scopeIncludes": ["string.quoted.double.thrift"]
+  }
+]

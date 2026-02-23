@@ -23,12 +23,10 @@ jobs:
       - name: Install pinned tools
         run: mise install
 
-      - name: Run formatter/linter/tests
+      - name: Run repo CI checks (Go + VS Code extension)
         run: |
-          mise run fmt
+          mise run ci
           git diff --exit-code
-          mise run lint
-          mise run test
 
   build-smoke:
     name: build-smoke (${{ matrix.os }})

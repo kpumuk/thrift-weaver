@@ -31,3 +31,9 @@ pre-commit:
         - "go.mod"
         - "go.sum"
       run: mise run test
+
+    - name: vscode extension ci
+      glob:
+        - "editors/vscode/**"
+        - "mise.toml"
+      run: mise run vscode-ci

@@ -1,0 +1,98 @@
+{
+  "name": "thrift-weaver-vscode",
+  "displayName": "Thrift Weaver",
+  "description": "Thrift language support for VS Code",
+  "version": "0.0.1",
+  "publisher": "kpumuk",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:thrift"
+  ],
+  "main": "./dist/extension.js",
+  "files": [
+    "dist/**",
+    "syntaxes/**",
+    "language-configuration.json",
+    "package.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -w -p ./tsconfig.json",
+    "typecheck": "tsc -p ./tsconfig.json --noEmit",
+    "test:syntax": "node ./scripts/test-syntax.mjs",
+    "test": "npm run typecheck && npm run test:syntax"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "thrift",
+        "aliases": [
+          "Thrift",
+          "thrift"
+        ],
+        "extensions": [
+          ".thrift"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "thrift",
+        "scopeName": "source.thrift",
+        "path": "./syntaxes/thrift.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Thrift Weaver",
+      "properties": {
+        "thrift.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to a `thriftls` binary. When empty, the extension will use managed install (M4 Track C)."
+        },
+        "thrift.server.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Additional arguments passed to `thriftls`."
+        },
+        "thrift.format.lineWidth": {
+          "type": "number",
+          "default": 100,
+          "minimum": 40,
+          "markdownDescription": "Preferred formatter line width passed to `thriftls` formatting requests."
+        },
+        "thrift.trace.server": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "markdownDescription": "LSP protocol tracing level for the Thrift language server."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.3",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.2.1"
+  }
+}

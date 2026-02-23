@@ -1,0 +1,134 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Thrift",
+  "scopeName": "source.thrift",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#booleans" },
+    { "include": "#types" },
+    { "include": "#annotations" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.thrift",
+          "begin": "/\\*\\*?",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.double-slash.thrift",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.line.number-sign.thrift",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.thrift",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.thrift",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.thrift",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.thrift",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.thrift",
+          "match": "\\b0[xX][0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.thrift",
+          "match": "\\b(?:\\d+\\.\\d+(?:[eE][+-]?\\d+)?|\\d+[eE][+-]?\\d+|\\.\\d+(?:[eE][+-]?\\d+)?)\\b"
+        },
+        {
+          "name": "constant.numeric.integer.thrift",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.declaration.thrift",
+          "match": "\\b(?:include|cpp_include|namespace|typedef|const|enum|senum|struct|union|exception|service|extends|throws)\\b"
+        },
+        {
+          "name": "keyword.control.modifier.thrift",
+          "match": "\\b(?:oneway|async|required|optional)\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.thrift",
+          "match": "\\b(?:true|false)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.builtin.thrift",
+          "match": "\\b(?:void|bool|byte|i8|i16|i32|i64|double|string|binary|uuid|map|list|set)\\b"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.thrift",
+          "begin": "\\((?=[^\\n\\)]*=)",
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.thrift",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*=)"
+            },
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#booleans" }
+          ]
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.thrift",
+          "match": "[,;:=]"
+        },
+        {
+          "name": "punctuation.definition.brackets.thrift",
+          "match": "[\\{\\}\\[\\]\\(\\)<>]"
+        }
+      ]
+    }
+  }
+}

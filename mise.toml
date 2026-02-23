@@ -1,13 +1,14 @@
 [tools]
 golang = "1.26.0"
+node = "22.14.0"
 tree-sitter = "0.26.5"
 golangci-lint = "2.10.1"
 lefthook = "2.1.1"
 goreleaser = "2.14.0"
 
 [tasks.ci]
-description = "Run formatter, linter, and tests"
-depends = ["format", "lint", "test"]
+description = "Run formatter, linters, and tests (Go + VS Code extension)"
+depends = ["format", "lint", "test", "vscode-ci"]
 
 [tasks.format]
 description = "Format Go code with golangci-lint formatters"
@@ -21,3 +22,21 @@ run = "golangci-lint run"
 [tasks.test]
 description = "Run Go tests"
 run = "go test ./..."
+
+[tasks.vscode-install]
+description = "Install VS Code extension dev dependencies (without lockfile)"
+run = "npm --prefix editors/vscode install --no-package-lock"
+
+[tasks.vscode-compile]
+description = "Compile VS Code extension TypeScript"
+depends = ["vscode-install"]
+run = "npm --prefix editors/vscode run compile"
+
+[tasks.vscode-test]
+description = "Run VS Code extension tests (typecheck + syntax smoke)"
+depends = ["vscode-install"]
+run = "npm --prefix editors/vscode run test"
+
+[tasks.vscode-ci]
+description = "Run VS Code extension compile + tests"
+depends = ["vscode-compile", "vscode-test"]
