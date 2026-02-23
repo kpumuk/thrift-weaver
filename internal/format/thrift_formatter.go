@@ -140,7 +140,7 @@ func (w *tokenWriter) finish() []byte {
 }
 
 func (w *tokenWriter) cappedBreaks() int {
-	return min(w.pendingBreaks, max(w.maxBlankLines+1, 1))
+	return min(w.pendingBreaks, max(w.maxBlankLines, 1))
 }
 
 func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]byte, error) {
@@ -184,12 +184,15 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			}
 			w.requestBreaks(1)
 		}
-		if order, ok := hints.topLevelStart[idx]; ok && order > 0 {
-			w.requestBreaks(hints.topLevelBreakCount(idx))
-		} else if _, ok := hints.memberStart[idx]; ok {
-			w.requestBreaks(1)
-		} else if _, ok := hints.wrapListStart[idx]; ok {
-			w.requestBreaks(1)
+		leadingHasComment := triviaHasComment(tok.Leading)
+		if !leadingHasComment {
+			if order, ok := hints.topLevelStart[idx]; ok && order > 0 {
+				w.requestBreaks(hints.topLevelBreakCount(idx))
+			} else if _, ok := hints.memberStart[idx]; ok {
+				w.requestBreaks(1)
+			} else if _, ok := hints.wrapListStart[idx]; ok {
+				w.requestBreaks(1)
+			}
 		}
 
 		if err := w.emitLeadingTrivia(tree.Source, tok.Leading, indentLevel, false); err != nil {
@@ -425,6 +428,8 @@ func topLevelDirectiveGroup(kind string) string {
 		return "include"
 	case "namespace_declaration":
 		return "namespace"
+	case "typedef_declaration":
+		return "typedef"
 	default:
 		return ""
 	}

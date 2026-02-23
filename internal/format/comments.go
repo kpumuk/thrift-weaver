@@ -94,8 +94,7 @@ func writePendingBreaks(out *bytes.Buffer, newline string, breaks, maxBlankLines
 	if breaks <= 0 {
 		return
 	}
-	limit := maxBlankLines + 1
-	limit = max(limit, 1)
+	limit := max(maxBlankLines, 1)
 	if breaks > limit {
 		breaks = limit
 	}

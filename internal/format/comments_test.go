@@ -24,7 +24,7 @@ func TestCommentEmitterPreservesCommentBytesAndCapsBlankLines(t *testing.T) {
 		t.Fatalf("EmitLeading: %v", err)
 	}
 
-	want := "  /*a*/ /*b*/\n\n  //c\n  "
+	want := "  /*a*/ /*b*/\n  //c\n  "
 	if string(got) != want {
 		t.Fatalf("EmitLeading = %q, want %q", got, want)
 	}

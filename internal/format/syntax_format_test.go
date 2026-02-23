@@ -108,6 +108,8 @@ cpp_include "b.h"
 namespace go foo.bar
 namespace rb foo.bar
 typedef i32 ID
+typedef string Name
+struct X {}
 `)
 
 	res, err := Source(context.Background(), src, "test.thrift", Options{})
@@ -124,6 +126,9 @@ typedef i32 ID
 		`namespace rb foo.bar`,
 		``,
 		`typedef i32 ID`,
+		`typedef string Name`,
+		``,
+		`struct X {}`,
 		``,
 	}, "\n")
 	if got != want {
@@ -182,4 +187,62 @@ func TestSourceServiceFunctionRespectsLineWidth(t *testing.T) {
 			t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 		}
 	})
+}
+
+func TestSourceDoesNotInsertExtraBlankLineBeforeFieldCommentBlock(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`struct Tenant {
+    3: required string primary_value
+    # Optional metadata captured during provisioning.
+    # Persisted in hashed form after initial write.
+    4: optional string secondary_value
+}
+`)
+
+	res, err := Source(context.Background(), src, "test.thrift", Options{})
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+
+	got := string(res.Output)
+	want := strings.Join([]string{
+		`struct Tenant {`,
+		`  3: required string primary_value`,
+		`  # Optional metadata captured during provisioning.`,
+		`  # Persisted in hashed form after initial write.`,
+		`  4: optional string secondary_value`,
+		`}`,
+		``,
+	}, "\n")
+	if got != want {
+		t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestSourceDoesNotInsertExtraBlankLineBeforeTopLevelCommentBlock(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`include "health_check_event.thrift"
+
+# Buyer » Doormate
+include "buyer_app/doormate/buyer_company.thrift"
+`)
+
+	res, err := Source(context.Background(), src, "test.thrift", Options{})
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+
+	got := string(res.Output)
+	want := strings.Join([]string{
+		`include "health_check_event.thrift"`,
+		``,
+		`# Buyer » Doormate`,
+		`include "buyer_app/doormate/buyer_company.thrift"`,
+		``,
+	}, "\n")
+	if got != want {
+		t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
 }
