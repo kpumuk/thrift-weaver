@@ -14,6 +14,9 @@ type formatHints struct {
 	topLevelStart  map[uint32]int
 	topLevelBreaks map[uint32]int
 	memberStart    map[uint32]struct{}
+	wrapListStart  map[uint32]struct{}
+	wrapListOpen   map[uint32]struct{}
+	wrapListClose  map[uint32]struct{}
 	declBlockOpen  map[uint32]declBlockSpec
 	declBlockClose map[uint32]declBlockSpec
 }
@@ -148,7 +151,7 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 		return bytes.Clone(tree.Source), nil
 	}
 
-	hints := collectFormatHints(tree)
+	hints := collectFormatHints(tree, opts)
 	w := newTokenWriter(policy.Newline, opts.Indent, opts.MaxBlankLines)
 	if policy.HasBOM {
 		w.buf.WriteString(utf8BOM)
@@ -175,9 +178,17 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			}
 			w.requestBreaks(1)
 		}
+		if _, ok := hints.wrapListClose[idx]; ok {
+			if indentLevel > 0 {
+				indentLevel--
+			}
+			w.requestBreaks(1)
+		}
 		if order, ok := hints.topLevelStart[idx]; ok && order > 0 {
 			w.requestBreaks(hints.topLevelBreakCount(idx))
 		} else if _, ok := hints.memberStart[idx]; ok {
+			w.requestBreaks(1)
+		} else if _, ok := hints.wrapListStart[idx]; ok {
 			w.requestBreaks(1)
 		}
 
@@ -198,6 +209,10 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 			indentLevel++
 			w.requestBreaks(1)
 		}
+		if _, ok := hints.wrapListOpen[idx]; ok {
+			indentLevel++
+			w.requestBreaks(1)
+		}
 
 		prevKind = tok.Kind
 		havePrev = true
@@ -206,11 +221,14 @@ func formatSyntaxTree(tree *syntax.Tree, opts Options, policy SourcePolicy) ([]b
 	return bytes.Clone(w.finish()), nil
 }
 
-func collectFormatHints(tree *syntax.Tree) formatHints {
+func collectFormatHints(tree *syntax.Tree, opts Options) formatHints {
 	hints := formatHints{
 		topLevelStart:  make(map[uint32]int),
 		topLevelBreaks: make(map[uint32]int),
 		memberStart:    make(map[uint32]struct{}),
+		wrapListStart:  make(map[uint32]struct{}),
+		wrapListOpen:   make(map[uint32]struct{}),
+		wrapListClose:  make(map[uint32]struct{}),
 		declBlockOpen:  make(map[uint32]declBlockSpec),
 		declBlockClose: make(map[uint32]declBlockSpec),
 	}
@@ -237,6 +255,9 @@ func collectFormatHints(tree *syntax.Tree) formatHints {
 				continue
 			}
 			hints.memberStart[member.FirstToken] = struct{}{}
+			if syntax.KindName(member.Kind) == "function_definition" {
+				addWrappedFunctionSignatureHints(tree, opts, &hints, member)
+			}
 		}
 	}
 
@@ -258,6 +279,130 @@ func collectFormatHints(tree *syntax.Tree) formatHints {
 	}
 
 	return hints
+}
+
+func addWrappedFunctionSignatureHints(tree *syntax.Tree, opts Options, hints *formatHints, fn *syntax.Node) {
+	if tree == nil || hints == nil || fn == nil {
+		return
+	}
+	if opts.LineWidth <= 0 {
+		return
+	}
+	if !functionDefinitionExceedsLineWidth(tree, fn, opts) {
+		return
+	}
+
+	for _, childID := range tree.ChildNodeIDs(fn.ID) {
+		child := tree.NodeByID(childID)
+		if child == nil {
+			continue
+		}
+		switch syntax.KindName(child.Kind) {
+		case "parameter_list":
+			addWrappedParameterListHints(tree, hints, child)
+		case "throws_clause":
+			for _, throwsChildID := range tree.ChildNodeIDs(child.ID) {
+				throwsChild := tree.NodeByID(throwsChildID)
+				if throwsChild == nil || syntax.KindName(throwsChild.Kind) != "parameter_list" {
+					continue
+				}
+				addWrappedParameterListHints(tree, hints, throwsChild)
+			}
+		}
+	}
+}
+
+func addWrappedParameterListHints(tree *syntax.Tree, hints *formatHints, list *syntax.Node) {
+	if tree == nil || hints == nil || list == nil {
+		return
+	}
+
+	openTok, closeTok, ok := parenListTokenBounds(tree, list)
+	if !ok {
+		return
+	}
+
+	hints.wrapListOpen[openTok] = struct{}{}
+	hints.wrapListClose[closeTok] = struct{}{}
+	for _, childID := range tree.ChildNodeIDs(list.ID) {
+		child := tree.NodeByID(childID)
+		if child == nil || syntax.KindName(child.Kind) != "field" {
+			continue
+		}
+		hints.wrapListStart[child.FirstToken] = struct{}{}
+	}
+}
+
+func parenListTokenBounds(tree *syntax.Tree, list *syntax.Node) (uint32, uint32, bool) {
+	if tree == nil || list == nil {
+		return 0, 0, false
+	}
+	if int(list.FirstToken) >= len(tree.Tokens) || int(list.LastToken) >= len(tree.Tokens) || list.LastToken < list.FirstToken {
+		return 0, 0, false
+	}
+	open := -1
+	closeTok := -1
+	for i := list.FirstToken; i <= list.LastToken && int(i) < len(tree.Tokens); i++ {
+		//exhaustive:ignore We intentionally care only about the paren delimiters here.
+		switch tree.Tokens[i].Kind {
+		case lexer.TokenLParen:
+			if open == -1 {
+				open = int(i)
+			}
+		case lexer.TokenRParen:
+			closeTok = int(i)
+		default:
+			// Ignore non-paren tokens while scanning the parameter list bounds.
+		}
+	}
+	if open == -1 || closeTok == -1 || closeTok < open {
+		return 0, 0, false
+	}
+	return uint32(open), uint32(closeTok), true
+}
+
+func functionDefinitionExceedsLineWidth(tree *syntax.Tree, fn *syntax.Node, opts Options) bool {
+	if tree == nil || fn == nil || opts.LineWidth <= 0 {
+		return false
+	}
+	flat, ok := flatTokenText(tree, fn.FirstToken, fn.LastToken)
+	if !ok {
+		return false
+	}
+	indentWidth := len(opts.Indent) // service members are rendered at indent level 1 in v1 formatter.
+	return indentWidth+len(flat) > opts.LineWidth
+}
+
+func flatTokenText(tree *syntax.Tree, first, last uint32) (string, bool) {
+	if tree == nil || int(first) >= len(tree.Tokens) || int(last) >= len(tree.Tokens) || last < first {
+		return "", false
+	}
+
+	var b strings.Builder
+	var prev lexer.TokenKind
+	havePrev := false
+
+	for i := first; i <= last && int(i) < len(tree.Tokens); i++ {
+		tok := tree.Tokens[i]
+		if tok.Kind == lexer.TokenEOF {
+			break
+		}
+		if triviaHasComment(tok.Leading) {
+			return "", false
+		}
+		if havePrev && shouldInsertSpace(prev, tok.Kind) {
+			b.WriteByte(' ')
+		}
+		raw := tok.Bytes(tree.Source)
+		if raw == nil {
+			return "", false
+		}
+		b.Write(raw)
+		prev = tok.Kind
+		havePrev = true
+	}
+
+	return b.String(), true
 }
 
 func topLevelBreakCount(prevKind, currKind string) int {

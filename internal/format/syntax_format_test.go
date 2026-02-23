@@ -130,3 +130,56 @@ typedef i32 ID
 		t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
+
+func TestSourceServiceFunctionRespectsLineWidth(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`service UpsertIdentityConnection {
+  UpsertIdentityConnectionResponse upsert_identity_connection(1: UpsertIdentityConnectionRequest request) throws(1: UpsertIdentityConnectionError error)
+}
+`)
+
+	t.Run("fits", func(t *testing.T) {
+		t.Parallel()
+
+		res, err := Source(context.Background(), src, "test.thrift", Options{LineWidth: 200})
+		if err != nil {
+			t.Fatalf("Source: %v", err)
+		}
+
+		got := string(res.Output)
+		want := strings.Join([]string{
+			`service UpsertIdentityConnection {`,
+			`  UpsertIdentityConnectionResponse upsert_identity_connection(1: UpsertIdentityConnectionRequest request) throws(1: UpsertIdentityConnectionError error)`,
+			`}`,
+			``,
+		}, "\n")
+		if got != want {
+			t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+	})
+
+	t.Run("wraps", func(t *testing.T) {
+		t.Parallel()
+
+		res, err := Source(context.Background(), src, "test.thrift", Options{LineWidth: 80})
+		if err != nil {
+			t.Fatalf("Source: %v", err)
+		}
+
+		got := string(res.Output)
+		want := strings.Join([]string{
+			`service UpsertIdentityConnection {`,
+			`  UpsertIdentityConnectionResponse upsert_identity_connection(`,
+			`    1: UpsertIdentityConnectionRequest request`,
+			`  ) throws(`,
+			`    1: UpsertIdentityConnectionError error`,
+			`  )`,
+			`}`,
+			``,
+		}, "\n")
+		if got != want {
+			t.Fatalf("formatted output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+	})
+}

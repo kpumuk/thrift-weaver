@@ -76,7 +76,7 @@ func formatNodeRange(tree *syntax.Tree, id syntax.NodeID, opts Options, policy S
 		return nil, fmt.Errorf("node %d token range out of bounds", id)
 	}
 
-	hints := collectFormatHints(tree)
+	hints := collectFormatHints(tree, opts)
 	indentLevel := indentLevelBeforeToken(hints, n.FirstToken)
 	writerAtLineStart := isLineStartOffset(tree.Source, n.Span.Start)
 	w := newTokenWriter(policy.Newline, opts.Indent, opts.MaxBlankLines)
