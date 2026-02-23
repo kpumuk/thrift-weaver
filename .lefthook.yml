@@ -1,0 +1,25 @@
+pre-push:
+  jobs:
+    - name: packages audit
+      tags:
+        - security
+      run: mise exec golang -- go tool golang.org/x/vuln/cmd/govulncheck ./...
+
+pre-commit:
+  fail_on_changes: "always"
+  jobs:
+    - name: lint
+      glob:
+        - ".golangci.yml"
+        - "*.go"
+        - "go.mod"
+        - "go.sum"
+        - "mise.toml"
+      run: mise run lint --fix
+
+    - name: test
+      glob:
+        - "*.go"
+        - "go.mod"
+        - "go.sum"
+      run: mise run test
