@@ -34,6 +34,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
+    "icon:render": "sh ./scripts/render-icon.sh",
     "bundle": "node ./scripts/bundle.mjs",
     "compile": "npm run bundle",
     "watch": "node ./scripts/bundle.mjs --watch",
