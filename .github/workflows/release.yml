@@ -22,7 +22,7 @@ jobs:
         run: npm --prefix editors/vscode install --no-package-lock
 
       - name: Set release version in extension manifest
-        run: npm --prefix editors/vscode version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+        run: npm --prefix editors/vscode version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
 
       - name: Compile extension
         run: npm --prefix editors/vscode run compile
