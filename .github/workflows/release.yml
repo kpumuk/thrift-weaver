@@ -60,6 +60,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: vscode-vsix
+          path: .release-extra
+
       - name: Run GoReleaser (draft)
         run: |
           repo_dir="/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
@@ -67,12 +73,6 @@ jobs:
           cd "$repo_dir"
           git rev-parse --show-toplevel
           goreleaser release --clean --draft
-
-      - name: Download VSIX artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: vscode-vsix
-          path: .release-extra
 
       - name: Generate thriftls managed-install manifest
         run: |
