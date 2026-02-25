@@ -17,6 +17,8 @@ builds:
   - id: thriftfmt
     main: ./cmd/thriftfmt
     binary: thriftfmt
+    flags: &go_build_flags
+      - -buildvcs=false
     env: &cgo_cross_env
       - CGO_ENABLED=1
       - >-
@@ -55,6 +57,7 @@ builds:
   - id: thriftls
     main: ./cmd/thriftls
     binary: thriftls
+    flags: *go_build_flags
     env: *cgo_cross_env
     goos:
       - linux
