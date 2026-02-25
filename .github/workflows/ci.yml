@@ -99,10 +99,16 @@ jobs:
 
       - name: Generate checksums + release metadata (smoke)
         run: |
+          snapshot_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' dist/metadata.json | head -n1)"
+          if [ -z "$snapshot_version" ]; then
+            echo "failed to read snapshot version from dist/metadata.json" >&2
+            exit 1
+          fi
+
           go run ./scripts/generate-release-manifest \
-            --version 0.0.0-ci \
+            --version "$snapshot_version" \
             --repo kpumuk/thrift-weaver \
-            --tag v0.0.0-ci \
+            --tag "v$snapshot_version" \
             --artifacts-dir dist \
             --checksums dist/checksums.txt \
             --output dist/thriftls-manifest.json
@@ -111,7 +117,7 @@ jobs:
           go run ./scripts/generate-vscode-release-metadata \
             --vsix "$vsix_path" \
             --checksums dist/checksums.txt \
-            --tool-version 0.0.0-ci \
+            --tool-version "$snapshot_version" \
             --extension-version 0.0.0-ci \
             --output dist/vscode-release-metadata.json
 

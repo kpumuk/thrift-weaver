@@ -52,7 +52,7 @@ type config struct {
 	BaseURL      string
 }
 
-var thriftlsArchivePattern = regexp.MustCompile(`^thriftls_(.+)_(linux|darwin|windows)_(amd64|arm64)\.(tar\.gz|zip)$`)
+var thriftlsArchivePattern = regexp.MustCompile(`^thriftls_(.+)[-_](linux|darwin|windows)_(amd64|arm64)\.(tar\.gz|zip)$`)
 
 func main() {
 	if err := run(); err != nil {
