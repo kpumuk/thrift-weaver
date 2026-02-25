@@ -32,7 +32,7 @@ builds:
         {{- end }}
         {{- if eq .Os "windows" }}
           {{- if eq .Arch "amd64" }}CC=x86_64-w64-mingw32-gcc{{- end }}
-          {{- if eq .Arch "arm64" }}CC=/llvm-mingw/bin/aarch64-w64-mingw32-gcc{{- end }}
+          {{- if eq .Arch "arm64" }}CC=aarch64-w64-mingw32-gcc{{- end }}
         {{- end }}
       - >-
         {{- if eq .Os "linux" }}
@@ -45,7 +45,7 @@ builds:
         {{- end }}
         {{- if eq .Os "windows" }}
           {{- if eq .Arch "amd64" }}CXX=x86_64-w64-mingw32-g++{{- end }}
-          {{- if eq .Arch "arm64" }}CXX=/llvm-mingw/bin/aarch64-w64-mingw32-g++{{- end }}
+          {{- if eq .Arch "arm64" }}CXX=aarch64-w64-mingw32-g++{{- end }}
         {{- end }}
     goos:
       - linux
