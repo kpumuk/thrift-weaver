@@ -9,6 +9,7 @@
   "version": "0.0.1",
   "publisher": "kpumuk",
   "license": "MIT",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -28,7 +29,8 @@
     "package.json",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "media/icon.png"
   ],
   "scripts": {
     "clean": "rm -rf dist",
