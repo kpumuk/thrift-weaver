@@ -50,6 +50,75 @@ jobs:
       - name: Build CLI binaries (smoke)
         run: go build ./cmd/...
 
+  package-vscode-extension-smoke:
+    name: package-vscode-extension-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build VS Code extension package (smoke)
+        run: |
+          npm --prefix editors/vscode install --no-package-lock
+          npm --prefix editors/vscode version 0.0.0-ci --no-git-tag-version
+          npm --prefix editors/vscode run compile
+          npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository
+
+      - name: Upload VSIX artifact for release smoke
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-vsix-smoke
+          path: editors/vscode/*.vsix
+          if-no-files-found: error
+
+  release-artifacts-smoke:
+    name: release-artifacts-smoke
+    runs-on: ubuntu-latest
+    needs: package-vscode-extension-smoke
+    container:
+      image: ghcr.io/goreleaser/goreleaser-cross:v1.26.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vscode-vsix-smoke
+          path: .release-extra
+
+      - name: Run GoReleaser release path (snapshot smoke)
+        run: goreleaser release --snapshot --clean
+
+      - name: Generate checksums + release metadata (smoke)
+        run: |
+          go run ./scripts/generate-release-manifest \
+            --version 0.0.0-ci \
+            --repo kpumuk/thrift-weaver \
+            --tag v0.0.0-ci \
+            --artifacts-dir dist \
+            --checksums dist/checksums.txt \
+            --output dist/thriftls-manifest.json
+
+          vsix_path="$(ls .release-extra/*.vsix | head -n1)"
+          go run ./scripts/generate-vscode-release-metadata \
+            --vsix "$vsix_path" \
+            --checksums dist/checksums.txt \
+            --tool-version 0.0.0-ci \
+            --extension-version 0.0.0-ci \
+            --output dist/vscode-release-metadata.json
+
+          test -s dist/checksums.txt
+          test -s dist/thriftls-manifest.json
+          test -s dist/vscode-release-metadata.json
+
   parser-generation-drift:
     name: parser-generation-drift
     runs-on: ubuntu-latest

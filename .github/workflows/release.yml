@@ -5,45 +5,103 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
+  package-vscode-extension:
+    name: package-vscode-extension
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm --prefix editors/vscode install --no-package-lock
+
+      - name: Set release version in extension manifest
+        run: npm --prefix editors/vscode version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+
+      - name: Compile extension
+        run: npm --prefix editors/vscode run compile
+
+      - name: Package extension (.vsix)
+        run: npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository
+
+      - name: Upload VSIX artifact for GoReleaser release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-vsix
+          path: editors/vscode/*.vsix
+          if-no-files-found: error
+
   goreleaser:
     name: release
     runs-on: ubuntu-latest
+    needs: package-vscode-extension
     environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    container:
+      image: ghcr.io/goreleaser/goreleaser-cross:v1.26.0
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
         with:
-          go-version-file: ./go.mod
+          name: vscode-vsix
+          path: .release-extra
 
       - name: Run GoReleaser (draft)
-        uses: goreleaser/goreleaser-action@v7
+        run: goreleaser release --clean --draft
+
+      - name: Generate thriftls managed-install manifest
+        run: |
+          go run ./scripts/generate-release-manifest \
+            --version "${GITHUB_REF_NAME#v}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --artifacts-dir dist \
+            --checksums dist/checksums.txt \
+            --output dist/thriftls-manifest.json
+
+      - name: Generate VS Code release metadata
+        run: |
+          vsix_path="$(ls .release-extra/*.vsix | head -n1)"
+          go run ./scripts/generate-vscode-release-metadata \
+            --vsix "$vsix_path" \
+            --checksums dist/checksums.txt \
+            --tool-version "${GITHUB_REF_NAME#v}" \
+            --extension-version "${GITHUB_REF_NAME#v}" \
+            --output dist/vscode-release-metadata.json
+
+      - name: Generate artifact attestations (release artifacts)
+        uses: actions/attest-build-provenance@v3
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean --draft
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            .release-extra/*.vsix
+            dist/thriftls-manifest.json
+            dist/vscode-release-metadata.json
 
-      - name: "Placeholder: generate thriftls managed-install manifest"
-        run: |
-          echo "TODO(TW-M5-REL-02): generate thriftls manifest from GoReleaser artifacts/checksums"
-          echo "Expected outputs: machine-readable manifest + checksums artifact"
-
-      - name: "Placeholder: VS Code extension packaging handoff"
-        run: |
-          echo "TODO(TW-M4-VSC-12/TW-M5-REL-04): build/package .vsix and integrate with release artifacts"
-
-      - name: "Release workflow notes (M0 placeholder)"
-        run: |
-          echo "Required secrets/environment notes:"
-          echo "- GITHUB_TOKEN (provided by Actions) for GitHub release publishing"
-          echo "- Additional secrets may be required later for signing/provenance and extension publishing"
+      - name: Upload manifest + metadata to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: |
+            dist/thriftls-manifest.json
+            dist/vscode-release-metadata.json
