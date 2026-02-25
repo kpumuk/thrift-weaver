@@ -10,7 +10,6 @@ gomod:
   env:
     - GOPROXY=https://proxy.golang.org,direct
     - GOSUMDB=sum.golang.org
-    - GOPRIVATE=github.com/kpumuk/thrift-weaver
   mod: mod
 
 builds:
