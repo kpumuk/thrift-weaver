@@ -4,6 +4,12 @@ Thrift formatter, LSP server, and VS Code extension.
 
 See `docs/rfcs/0001-thrift-tooling-platform.md` for the project RFC and implementation plan.
 
+Docs:
+
+- `docs/user-guide.md` — CLI, LSP, and VS Code usage (beta)
+- `docs/release.md` — release artifacts, checksums, attestations, and beta supply-chain policy
+- `docs/linux-managed-binary-compatibility.md` — Linux managed `thriftls` compatibility policy (beta)
+
 ## Development Toolchain
 
 - Go version is pinned via `mise` (see `mise.toml`).

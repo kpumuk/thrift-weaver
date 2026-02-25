@@ -19,6 +19,7 @@ This project currently publishes **unsigned beta artifacts** with mandatory SHA-
 - GitHub Actions release workflow emits artifact attestations for release archives, checksums, `.vsix`, and generated metadata/manifest files.
 - The VS Code extension release metadata includes the `.vsix` checksum and the referenced `thriftls` manifest schema version.
 - Platform code signing / notarization is **not yet required** for beta. This remains an explicit temporary policy tracked in the RFC and execution plan.
+- Linux managed-binary compatibility policy is documented in `docs/linux-managed-binary-compatibility.md`.
 
 ## Manual verification
 
@@ -44,3 +45,4 @@ gh attestation verify thriftls_0.1.0_darwin_arm64.tar.gz --repo kpumuk/thrift-we
 
 - Windows `arm64` binary publication is best-effort.
 - The release workflow uses `goreleaser-cross` to build `cgo`/tree-sitter targets in a single Linux job.
+- Beta release notes should include the Linux compatibility snippet/policy callout from `docs/linux-managed-binary-compatibility.md`.
