@@ -1,4 +1,5 @@
 /thriftfmt
 /thriftls
 /dist/
+/.release-extra/
 .DS_Store
