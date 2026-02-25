@@ -64,7 +64,7 @@ jobs:
 
       - name: Build VS Code extension package (smoke)
         run: |
-          npm --prefix editors/vscode install --no-package-lock
+          npm --prefix editors/vscode ci
           npm --prefix editors/vscode version 0.0.0-ci --no-git-tag-version
           npm --prefix editors/vscode run compile
           npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository

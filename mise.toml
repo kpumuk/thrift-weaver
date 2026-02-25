@@ -24,8 +24,8 @@ description = "Run Go tests"
 run = "go test ./..."
 
 [tasks.vscode-install]
-description = "Install VS Code extension dev dependencies (without lockfile)"
-run = "npm --prefix editors/vscode install --no-package-lock"
+description = "Install VS Code extension dev dependencies (lockfile)"
+run = "npm --prefix editors/vscode ci"
 
 [tasks.vscode-compile]
 description = "Compile VS Code extension TypeScript"

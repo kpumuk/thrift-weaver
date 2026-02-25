@@ -41,7 +41,7 @@
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
     "test:syntax": "node ./scripts/test-syntax.mjs",
     "test": "npm run typecheck && npm run test:syntax",
-    "package": "npx @vscode/vsce package"
+    "package": "vsce package"
   },
   "contributes": {
     "languages": [
@@ -116,6 +116,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.7.1",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
     "esbuild": "^0.25.1",
