@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 
@@ -70,7 +70,7 @@ jobs:
           npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository
 
       - name: Upload VSIX artifact for release smoke
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vscode-vsix-smoke
           path: editors/vscode/*.vsix
@@ -89,7 +89,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download VSIX artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: vscode-vsix-smoke
           path: .release-extra
