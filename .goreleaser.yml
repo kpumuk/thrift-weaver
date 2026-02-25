@@ -54,6 +54,10 @@ builds:
     goarch:
       - amd64
       - arm64
+    ignore:
+      # Temporarily disabled: goreleaser-cross v1.26.0 image used in CI lacks a Windows ARM64 MinGW toolchain.
+      - goos: windows
+        goarch: arm64
   - id: thriftls
     main: ./cmd/thriftls
     binary: thriftls
@@ -66,6 +70,10 @@ builds:
     goarch:
       - amd64
       - arm64
+    ignore:
+      # Temporarily disabled: goreleaser-cross v1.26.0 image used in CI lacks a Windows ARM64 MinGW toolchain.
+      - goos: windows
+        goarch: arm64
 
 archives:
   - id: default
