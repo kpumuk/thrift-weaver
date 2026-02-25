@@ -76,7 +76,20 @@ builds:
         goarch: arm64
 
 archives:
-  - id: default
+  - id: thriftfmt
+    ids:
+      - thriftfmt
+    name_template: >-
+      {{ .Binary }}_
+      {{- .Version }}-
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+  - id: thriftls
+    ids:
+      - thriftls
     name_template: >-
       {{ .Binary }}_
       {{- .Version }}-
