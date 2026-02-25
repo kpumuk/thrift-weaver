@@ -67,10 +67,13 @@ jobs:
           path: .release-extra
 
       - name: Run GoReleaser (draft)
-        run: goreleaser release --clean --draft
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          goreleaser release --clean --draft
 
       - name: Generate thriftls managed-install manifest
         run: |
+          cd "$GITHUB_WORKSPACE"
           go run ./scripts/generate-release-manifest \
             --version "${GITHUB_REF_NAME#v}" \
             --repo "${GITHUB_REPOSITORY}" \
@@ -81,6 +84,7 @@ jobs:
 
       - name: Generate VS Code release metadata
         run: |
+          cd "$GITHUB_WORKSPACE"
           vsix_path="$(ls .release-extra/*.vsix | head -n1)"
           go run ./scripts/generate-vscode-release-metadata \
             --vsix "$vsix_path" \
