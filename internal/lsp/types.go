@@ -51,6 +51,7 @@ type ServerCapabilities struct {
 	DocumentSymbolProvider          bool                    `json:"documentSymbolProvider,omitempty"`
 	FoldingRangeProvider            bool                    `json:"foldingRangeProvider,omitempty"`
 	SelectionRangeProvider          bool                    `json:"selectionRangeProvider,omitempty"`
+	SemanticTokensProvider          *SemanticTokensOptions  `json:"semanticTokensProvider,omitempty"`
 }
 
 // TextDocumentSyncOptions declares document sync behavior.
@@ -198,4 +199,28 @@ type SelectionRangeParams struct {
 type SelectionRange struct {
 	Range  Range           `json:"range"`
 	Parent *SelectionRange `json:"parent,omitempty"`
+}
+
+// SemanticTokensParams identifies the target document for semantic token requests.
+type SemanticTokensParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// SemanticTokens is the LSP semantic tokens full response payload.
+type SemanticTokens struct {
+	ResultID string   `json:"resultId,omitempty"`
+	Data     []uint32 `json:"data"`
+}
+
+// SemanticTokensOptions declares semantic token server support.
+type SemanticTokensOptions struct {
+	Legend SemanticTokensLegend `json:"legend"`
+	Full   bool                 `json:"full,omitempty"`
+	Range  bool                 `json:"range,omitempty"`
+}
+
+// SemanticTokensLegend describes token types/modifiers indexes used in SemanticTokens.Data.
+type SemanticTokensLegend struct {
+	TokenTypes     []string `json:"tokenTypes"`
+	TokenModifiers []string `json:"tokenModifiers"`
 }

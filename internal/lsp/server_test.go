@@ -28,6 +28,9 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
 		t.Fatalf("unexpected capabilities: %+v", got)
 	}
+	if got.SemanticTokensProvider == nil || !got.SemanticTokensProvider.Full {
+		t.Fatalf("semanticTokensProvider not advertised correctly: %+v", got.SemanticTokensProvider)
+	}
 }
 
 func TestServerRunInitializeShutdownExit(t *testing.T) {
@@ -475,6 +478,66 @@ const i32 ANSWER = 42
 	if sels[0].Parent.Range.Start.Line > sels[0].Range.Start.Line ||
 		sels[0].Parent.Range.End.Line < sels[0].Range.End.Line {
 		t.Fatalf("parent range %+v should contain child %+v", sels[0].Parent.Range, sels[0].Range)
+	}
+}
+
+func TestServerRunSemanticTokensFull(t *testing.T) {
+	t.Parallel()
+
+	src := strings.TrimLeft(`
+// docs
+service Demo {
+  void ping(1: i32 id) throws (1: string msg)
+}
+`, "\n")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: "file:///semantic.thrift", Version: 1, Text: src},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`20`),
+		Method:  "textDocument/semanticTokens/full",
+		Params:  mustJSON(t, SemanticTokensParams{TextDocument: TextDocumentIdentifier{URI: "file:///semantic.thrift"}}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "20")
+	if resp.Error != nil {
+		t.Fatalf("semanticTokens/full error: %+v", resp.Error)
+	}
+	var tokens SemanticTokens
+	marshalRoundtrip(t, resp.Result, &tokens)
+	if len(tokens.Data) == 0 || len(tokens.Data)%5 != 0 {
+		t.Fatalf("unexpected semantic token payload length=%d", len(tokens.Data))
+	}
+
+	keywordType := semanticTokenTypeIndex["keyword"]
+	methodType := semanticTokenTypeIndex["method"]
+	commentType := semanticTokenTypeIndex["comment"]
+
+	var sawKeyword, sawMethod, sawComment bool
+	for i := 0; i+4 < len(tokens.Data); i += 5 {
+		switch tokens.Data[i+3] {
+		case keywordType:
+			sawKeyword = true
+		case methodType:
+			sawMethod = true
+		case commentType:
+			sawComment = true
+		}
+	}
+	if !sawKeyword || !sawMethod || !sawComment {
+		t.Fatalf("expected keyword/method/comment semantic tokens, got data=%v", tokens.Data)
 	}
 }
 

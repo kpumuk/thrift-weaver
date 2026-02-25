@@ -12,5 +12,13 @@ func DefaultServerCapabilities() ServerCapabilities {
 		DocumentSymbolProvider:          true,
 		FoldingRangeProvider:            true,
 		SelectionRangeProvider:          true,
+		SemanticTokensProvider: &SemanticTokensOptions{
+			Legend: SemanticTokensLegend{
+				TokenTypes:     semanticTokenLegendTypes(),
+				TokenModifiers: semanticTokenLegendModifiers(),
+			},
+			Full:  true,
+			Range: false,
+		},
 	}
 }

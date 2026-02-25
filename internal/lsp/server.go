@@ -247,6 +247,16 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(ranges)
+	case "textDocument/semanticTokens/full":
+		var p SemanticTokensParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		tokens, err := s.SemanticTokensFull(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(tokens)
 	default:
 		return writeErr(jsonRPCMethodNotFound, "method not found")
 	}
