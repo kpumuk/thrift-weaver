@@ -46,3 +46,4 @@ gh attestation verify thriftls_0.1.0_darwin_arm64.tar.gz --repo kpumuk/thrift-we
 - Windows `arm64` binary publication is best-effort.
 - The release workflow uses `goreleaser-cross` to build `cgo`/tree-sitter targets in a single Linux job.
 - Beta release notes should include the Linux compatibility snippet/policy callout from `docs/linux-managed-binary-compatibility.md`.
+- Beta release notes should include a performance summary (parse/format p50/p95 + LSP memory loop) generated per `docs/performance.md`.
