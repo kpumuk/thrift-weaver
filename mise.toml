@@ -23,6 +23,10 @@ run = "golangci-lint run"
 description = "Run Go tests"
 run = "go test ./..."
 
+[tasks.test-race-lsp]
+description = "Run race detector for LSP/document-store packages"
+run = "go test -race ./internal/lsp ./cmd/thriftls"
+
 [tasks.vscode-install]
 description = "Install VS Code extension dev dependencies (lockfile)"
 run = "npm --prefix editors/vscode ci"

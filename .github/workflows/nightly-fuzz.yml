@@ -1,0 +1,106 @@
+name: nightly-fuzz
+
+on:
+  schedule:
+    # Daily short run.
+    - cron: "17 3 * * *"
+    # Weekly longer run.
+    - cron: "29 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Fuzz profile to run
+        required: true
+        default: daily
+        type: choice
+        options:
+          - daily
+          - weekly
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.id }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: lexer
+            pkg: ./internal/lexer
+            target: FuzzLex
+          - id: syntax
+            pkg: ./internal/syntax
+            target: FuzzParse
+          - id: format
+            pkg: ./internal/format
+            target: FuzzDocumentAndRange
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Resolve fuzz profile
+        id: profile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          profile="daily"
+          fuzztime="2m"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "29 4 * * 0" ]; then
+            profile="weekly"
+            fuzztime="10m"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            profile="${{ inputs.profile }}"
+            case "$profile" in
+              daily)  fuzztime="2m" ;;
+              weekly) fuzztime="10m" ;;
+              *)
+                echo "unsupported profile: $profile" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "fuzztime=$fuzztime" >> "$GITHUB_OUTPUT"
+          echo "Resolved profile=$profile fuzztime=$fuzztime"
+
+      - name: Run fuzz target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/fuzz-logs"
+          log_path="$RUNNER_TEMP/fuzz-logs/${{ matrix.id }}.log"
+
+          mise exec golang -- go test "${{ matrix.pkg }}" \
+            -run='^$' \
+            -fuzz="${{ matrix.target }}" \
+            -fuzztime="${{ steps.profile.outputs.fuzztime }}" \
+            2>&1 | tee "$log_path"
+
+      - name: Upload fuzz crashers and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-fuzz-${{ steps.profile.outputs.profile }}-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            internal/**/testdata/fuzz/**
+            ${{ runner.temp }}/fuzz-logs/*.log
+          if-no-files-found: ignore
+
