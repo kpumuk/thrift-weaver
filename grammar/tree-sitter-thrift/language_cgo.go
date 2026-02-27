@@ -1,3 +1,5 @@
+//go:build cgo && thriftweaver_cgo
+
 // Package treesitterthrift exposes the generated tree-sitter grammar and queries for Thrift IDL.
 package treesitterthrift
 

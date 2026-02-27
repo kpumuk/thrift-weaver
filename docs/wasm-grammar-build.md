@@ -32,6 +32,10 @@ This executes:
 
 The wasm output filename is fixed (`thrift.wasm`) to keep byte output deterministic.
 
+## Runtime Packaging
+
+`thriftls` embeds `thrift.wasm` and `thrift.wasm.sha256` into the binary via `go:embed` from [embed.go](/Users/dmytro/work/github/thrift-weaver/internal/grammars/thrift/embed.go).
+
 ## Verify Drift and Checksums
 
 Local drift verification:

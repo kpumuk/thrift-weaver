@@ -1,3 +1,5 @@
+//go:build cgo && thriftweaver_cgo
+
 package treesitterthrift
 
 import (

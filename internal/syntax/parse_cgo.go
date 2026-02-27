@@ -1,4 +1,4 @@
-//go:build !cgo || !thriftweaver_cgo
+//go:build cgo && thriftweaver_cgo
 
 package syntax
 
@@ -9,8 +9,9 @@ import (
 	"math"
 	"slices"
 
+	sitter "github.com/tree-sitter/go-tree-sitter"
+
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
-	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
 	"github.com/kpumuk/thrift-weaver/internal/text"
 )
 
@@ -53,9 +54,8 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 	out.Diagnostics = append(out.Diagnostics, alignmentDiags...)
 
 	builder := cstBuilder{
-		tokens:    out.Tokens,
-		nodes:     &out.Nodes,
-		lineIndex: out.LineIndex,
+		tokens: out.Tokens,
+		nodes:  &out.Nodes,
 	}
 	root := rawTree.Root().Inner()
 	if root == nil {
@@ -63,7 +63,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 	}
 	out.Root = builder.buildNode(root, NoNode)
 	out.Diagnostics = append(out.Diagnostics, builder.diagnostics...)
-	out.Diagnostics = append(out.Diagnostics, collectParserDiagnostics(root, out.LineIndex)...)
+	out.Diagnostics = append(out.Diagnostics, collectParserDiagnostics(root)...)
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -80,25 +80,24 @@ func Reparse(ctx context.Context, old *Tree, src []byte, opts ParseOptions) (*Tr
 type cstBuilder struct {
 	tokens      []lexer.Token
 	nodes       *[]Node
-	lineIndex   *text.LineIndex
 	diagnostics []Diagnostic
 }
 
-func (b *cstBuilder) buildNode(raw *ts.RawNode, parent NodeID) NodeID {
+func (b *cstBuilder) buildNode(raw *sitter.Node, parent NodeID) NodeID {
 	id := nodeIDFromLen(len(*b.nodes))
-	sp := spanFromRawNode(raw, b.lineIndex)
+	sp := spanFromTSNode(raw)
 	firstTok, lastTok, rangeErr := tokenRangeForSpan(b.tokens, sp)
 	if rangeErr != nil {
 		b.diagnostics = append(b.diagnostics, internalAlignmentDiag(sp, rangeErr.Error()))
 	}
 
-	flags := nodeFlagsFromRaw(raw)
-	if raw.HasError {
+	flags := nodeFlagsFromTS(raw)
+	if raw.HasError() {
 		flags |= NodeFlagRecovered
 	}
 	*b.nodes = append(*b.nodes, Node{
 		ID:         id,
-		Kind:       NodeKind(raw.KindID),
+		Kind:       NodeKind(raw.KindId()),
 		Span:       sp,
 		FirstToken: firstTok,
 		LastToken:  lastTok,
@@ -106,8 +105,9 @@ func (b *cstBuilder) buildNode(raw *ts.RawNode, parent NodeID) NodeID {
 		Flags:      flags,
 	})
 
-	children := raw.Children
+	children := childrenOf(raw)
 	if len(children) == 0 {
+		// Leaf nodes expose token refs directly for deterministic token lookup at the leaves.
 		leaf := &(*b.nodes)[id]
 		for i := firstTok; i <= lastTok && int(i) < len(b.tokens); i++ {
 			if b.tokens[i].Kind == lexer.TokenEOF {
@@ -122,50 +122,57 @@ func (b *cstBuilder) buildNode(raw *ts.RawNode, parent NodeID) NodeID {
 	}
 
 	childRefs := make([]ChildRef, 0, len(children))
-	for _, child := range children {
-		if child == nil || child.IsExtra {
-			continue
-		}
-		childID := b.buildNode(child, id)
+	for i := range children {
+		childID := b.buildNode(&children[i], id)
 		childRefs = append(childRefs, ChildRef{IsToken: false, Index: uint32(childID)})
 	}
 	(*b.nodes)[id].Children = childRefs
 	return id
 }
 
-func nodeFlagsFromRaw(n *ts.RawNode) NodeFlags {
+func childrenOf(raw *sitter.Node) []sitter.Node {
+	if raw == nil {
+		return nil
+	}
+	cursor := raw.Walk()
+	defer cursor.Close()
+	children := raw.Children(cursor)
+	if len(children) == 0 {
+		return nil
+	}
+
+	out := children[:0]
+	for i := range children {
+		if children[i].IsExtra() {
+			continue
+		}
+		out = append(out, children[i])
+	}
+	return out
+}
+
+func nodeFlagsFromTS(n *sitter.Node) NodeFlags {
 	var flags NodeFlags
 	if n == nil {
 		return flags
 	}
-	if n.IsNamed {
+	if n.IsNamed() {
 		flags |= NodeFlagNamed
 	}
-	if n.IsError {
+	if n.IsError() {
 		flags |= NodeFlagError
 	}
-	if n.IsMissing {
+	if n.IsMissing() {
 		flags |= NodeFlagMissing
 	}
 	return flags
 }
 
-func spanFromRawNode(n *ts.RawNode, li *text.LineIndex) text.Span {
-	if n == nil || li == nil {
+func spanFromTSNode(n *sitter.Node) text.Span {
+	if n == nil {
 		return text.Span{}
 	}
-	if n.StartByte >= 0 && n.EndByte >= n.StartByte && n.EndByte <= int(li.SourceLen()) {
-		return text.Span{Start: text.ByteOffset(n.StartByte), End: text.ByteOffset(n.EndByte)}
-	}
-	start, err := li.PointToOffset(text.Point{Line: n.StartRow, Column: n.StartCol})
-	if err != nil {
-		return text.Span{}
-	}
-	end, err := li.PointToOffset(text.Point{Line: n.EndRow, Column: n.EndCol})
-	if err != nil {
-		return text.Span{}
-	}
-	return text.Span{Start: start, End: end}
+	return text.Span{Start: byteOffsetFromTS(n.StartByte()), End: byteOffsetFromTS(n.EndByte())}
 }
 
 func mapLexerDiagnostics(in []lexer.Diagnostic) []Diagnostic {
@@ -183,24 +190,24 @@ func mapLexerDiagnostics(in []lexer.Diagnostic) []Diagnostic {
 	return out
 }
 
-func collectParserDiagnostics(root *ts.RawNode, li *text.LineIndex) []Diagnostic {
+func collectParserDiagnostics(root *sitter.Node) []Diagnostic {
 	if root == nil {
 		return nil
 	}
 	var out []Diagnostic
-	walkRaw(root, func(n *ts.RawNode) {
-		sp := spanFromRawNode(n, li)
+	walkTS(root, func(n *sitter.Node) {
+		sp := spanFromTSNode(n)
 		switch {
-		case n.IsMissing:
+		case n.IsMissing():
 			out = append(out, Diagnostic{
 				Code:        DiagnosticParserMissingNode,
-				Message:     "missing " + n.Kind,
+				Message:     "missing " + n.Kind(),
 				Severity:    SeverityError,
 				Span:        sp,
 				Source:      "parser",
 				Recoverable: true,
 			})
-		case n.IsError:
+		case n.IsError():
 			out = append(out, Diagnostic{
 				Code:        DiagnosticParserErrorNode,
 				Message:     "syntax error",
@@ -214,13 +221,17 @@ func collectParserDiagnostics(root *ts.RawNode, li *text.LineIndex) []Diagnostic
 	return out
 }
 
-func walkRaw(root *ts.RawNode, visit func(*ts.RawNode)) {
+func walkTS(root *sitter.Node, visit func(*sitter.Node)) {
 	if root == nil {
 		return
 	}
 	visit(root)
-	for _, child := range root.Children {
-		walkRaw(child, visit)
+	cursor := root.Walk()
+	defer cursor.Close()
+	children := root.Children(cursor)
+	for i := range children {
+		child := children[i]
+		walkTS(&child, visit)
 	}
 }
 
@@ -314,6 +325,13 @@ func internalAlignmentDiag(span text.Span, msg string) Diagnostic {
 		Source:      "parser",
 		Recoverable: false,
 	}
+}
+
+func byteOffsetFromTS(v uint) text.ByteOffset {
+	if uint64(v) > uint64(math.MaxInt) {
+		return text.ByteOffset(math.MaxInt)
+	}
+	return text.ByteOffset(int(v))
 }
 
 func uint32FromInt(v int) uint32 {

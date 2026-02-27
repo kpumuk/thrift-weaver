@@ -1,7 +1,6 @@
 package wasm
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -17,10 +16,11 @@ func TestNewFactoryWiring(t *testing.T) {
 	}
 
 	parser, err := factory.NewParser()
-	if parser != nil {
-		t.Fatal("expected nil parser from placeholder wasm backend")
+	if err != nil {
+		t.Fatalf("NewParser() error = %v", err)
 	}
-	if !errors.Is(err, ErrNotReady) {
-		t.Fatalf("NewParser() error = %v, want %v", err, ErrNotReady)
+	if parser == nil {
+		t.Fatal("expected parser instance")
 	}
+	parser.Close()
 }

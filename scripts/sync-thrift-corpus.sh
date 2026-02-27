@@ -12,7 +12,7 @@ set -euo pipefail
 # - prints a sync summary
 #
 # Note:
-# - this is a conservative M0 scaffold script; it copies a small representative subset.
+# - this is a conservative scaffold script; it copies a small representative subset.
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 /path/to/thrift" >&2
@@ -58,4 +58,3 @@ if [[ -f "$SRC_ROOT/test/ThriftTest.thrift" ]]; then
 fi
 
 echo "sync-thrift-corpus: complete"
-

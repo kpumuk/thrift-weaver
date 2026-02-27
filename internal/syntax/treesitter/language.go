@@ -1,13 +1,33 @@
-// Package treesitter wraps go-tree-sitter parser primitives for Thrift syntax parsing.
+// Package treesitter wraps parser primitives for Thrift syntax parsing.
 package treesitter
 
-import (
-	sitter "github.com/tree-sitter/go-tree-sitter"
+import "sync"
 
-	treesitterthrift "github.com/kpumuk/thrift-weaver/grammar/tree-sitter-thrift"
+// NodeKindRegistry is a minimal node-kind registry used in no-cgo builds.
+type NodeKindRegistry struct{}
+
+var (
+	kindRegistryMu sync.RWMutex
+	idToKind       = map[uint16]string{}
+
+	languageInstance = &NodeKindRegistry{}
 )
 
-// Language returns the Thrift tree-sitter language instance.
-func Language() *sitter.Language {
-	return treesitterthrift.Language()
+// Language returns the Thrift language instance.
+func Language() *NodeKindRegistry {
+	return languageInstance
+}
+
+// NodeKindForID resolves a node kind name by id.
+func (l *NodeKindRegistry) NodeKindForID(id uint16) string {
+	kindRegistryMu.RLock()
+	name := idToKind[id]
+	kindRegistryMu.RUnlock()
+	return name
+}
+
+func rememberNodeKind(id uint16, name string) {
+	kindRegistryMu.Lock()
+	defer kindRegistryMu.Unlock()
+	idToKind[id] = name
 }

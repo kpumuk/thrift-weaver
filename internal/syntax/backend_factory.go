@@ -4,11 +4,12 @@ import (
 	"sync"
 
 	parserbackend "github.com/kpumuk/thrift-weaver/internal/syntax/backend"
+	"github.com/kpumuk/thrift-weaver/internal/syntax/backend/wasm"
 )
 
 var (
 	parserFactoryMu sync.RWMutex
-	parserFactory   parserbackend.Factory = parserbackend.NewTreeSitterFactory()
+	parserFactory   parserbackend.Factory = wasm.NewFactory(wasm.Config{})
 )
 
 func currentParserFactory() parserbackend.Factory {

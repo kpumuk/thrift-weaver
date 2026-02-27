@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
+	"github.com/kpumuk/thrift-weaver/internal/testutil"
 )
 
 func TestParseValidBuildsTreeAndQueries(t *testing.T) {
@@ -175,20 +178,71 @@ func TestParseIgnoresExtraCommentNodesForAlignment(t *testing.T) {
 func TestReparseEquivalentToParse(t *testing.T) {
 	t.Parallel()
 
-	src := []byte("enum E { A = 1, B = 2, }\n")
-	opts := ParseOptions{URI: "file:///eq.thrift", Version: 3}
-
-	first, err := Parse(context.Background(), src, opts)
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
+	cases := map[string][]byte{
+		"valid":     []byte("enum E { A = 1, B = 2, }\n"),
+		"malformed": []byte("service Broken { void f(1: string name }\n"),
 	}
-	second, err := Reparse(context.Background(), first, src, opts)
-	if err != nil {
-		t.Fatalf("Reparse() error = %v", err)
-	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	if !reflect.DeepEqual(treeSnapshot(first), treeSnapshot(second)) {
-		t.Fatalf("Parse/Reparse mismatch\nfirst=%#v\nsecond=%#v", treeSnapshot(first), treeSnapshot(second))
+			opts := ParseOptions{
+				URI:     "file:///" + name + ".thrift",
+				Version: 3,
+			}
+
+			first, err := Parse(context.Background(), src, opts)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			second, err := Reparse(context.Background(), first, src, opts)
+			if err != nil {
+				t.Fatalf("Reparse() error = %v", err)
+			}
+
+			if !reflect.DeepEqual(treeSnapshot(first), treeSnapshot(second)) {
+				t.Fatalf("Parse/Reparse mismatch\nfirst=%#v\nsecond=%#v", treeSnapshot(first), treeSnapshot(second))
+			}
+		})
+	}
+}
+
+func TestParseCorpusFixtures(t *testing.T) {
+	t.Parallel()
+
+	for _, setName := range []string{"valid", "invalid", "editor"} {
+		t.Run(setName, func(t *testing.T) {
+			t.Parallel()
+
+			files, err := testutil.CorpusFiles(setName)
+			if err != nil {
+				t.Fatalf("CorpusFiles(%q): %v", setName, err)
+			}
+			for _, file := range files {
+				t.Run(filepath.Base(file), func(t *testing.T) {
+					assertParseFile(t, file)
+				})
+			}
+		})
+	}
+}
+
+func assertParseFile(t *testing.T, file string) {
+	t.Helper()
+
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", file, err)
+	}
+	tree, err := Parse(context.Background(), src, ParseOptions{
+		URI:     "file://" + file,
+		Version: 1,
+	})
+	if err != nil {
+		t.Fatalf("Parse(%q): %v", file, err)
+	}
+	if tree == nil || tree.Root == NoNode {
+		t.Fatalf("Parse(%q): missing root", file)
 	}
 }
 

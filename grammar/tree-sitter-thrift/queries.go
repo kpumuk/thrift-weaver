@@ -1,3 +1,4 @@
+// Package treesitterthrift provides embedded tree-sitter query assets.
 package treesitterthrift
 
 import (

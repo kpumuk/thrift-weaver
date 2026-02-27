@@ -1,3 +1,5 @@
+//go:build !cgo || !thriftweaver_cgo
+
 package lsp
 
 import (
@@ -7,11 +9,8 @@ import (
 	"slices"
 	"sort"
 
-	sitter "github.com/tree-sitter/go-tree-sitter"
-
-	treesitterthrift "github.com/kpumuk/thrift-weaver/grammar/tree-sitter-thrift"
+	"github.com/kpumuk/thrift-weaver/internal/lexer"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
-	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
 
@@ -36,25 +35,20 @@ var (
 	semanticTokenModIndex  = indexStringsUint32(semanticTokenModifiers)
 )
 
-type semanticCaptureSpec struct {
-	tokenType string
-	modifiers []string
-	priority  int
-}
-
 type semanticAbsToken struct {
 	line      uint32
 	startChar uint32
 	length    uint32
 	tokenType uint32
 	modBits   uint32
-	priority  int
 }
 
 type semanticSpanKey struct {
 	line      uint32
 	startChar uint32
 	length    uint32
+	tokenType uint32
+	modBits   uint32
 }
 
 func semanticTokenLegendTypes() []string {
@@ -71,93 +65,32 @@ func (s *Server) SemanticTokensFull(ctx context.Context, p SemanticTokensParams)
 	if err != nil {
 		return SemanticTokens{}, err
 	}
-	return lspSemanticTokensFromSyntax(ctx, tree)
+	return lspSemanticTokensFromSyntax(tree)
 }
 
-func lspSemanticTokensFromSyntax(ctx context.Context, tree *syntax.Tree) (SemanticTokens, error) {
+func lspSemanticTokensFromSyntax(tree *syntax.Tree) (SemanticTokens, error) {
 	if tree == nil {
 		return SemanticTokens{}, errors.New("nil syntax tree")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return SemanticTokens{}, err
+	if tree.LineIndex == nil {
+		return SemanticTokens{}, errors.New("nil line index")
 	}
 
-	querySource, err := treesitterthrift.QuerySource("highlights")
-	if err != nil {
-		return SemanticTokens{}, err
-	}
-	query, qErr := sitter.NewQuery(ts.Language(), querySource)
-	if qErr != nil {
-		return SemanticTokens{}, qErr
-	}
-	defer query.Close()
-
-	parser, err := ts.NewParser()
-	if err != nil {
-		return SemanticTokens{}, err
-	}
-	defer parser.Close()
-	rawTree, err := parser.Parse(ctx, tree.Source, nil)
-	if err != nil {
-		return SemanticTokens{}, err
-	}
-	defer rawTree.Close()
-
-	root := rawTree.Inner().RootNode()
-	if root == nil {
-		return SemanticTokens{}, errors.New("nil tree-sitter root")
-	}
-
-	cursor := sitter.NewQueryCursor()
-	defer cursor.Close()
-	captures := cursor.Captures(query, root, tree.Source)
-	captureNames := query.CaptureNames()
-	captureNameCount, ok := uint32FromNonNegativeInt(len(captureNames))
-	if !ok {
-		return SemanticTokens{}, errors.New("too many query capture names")
-	}
-
-	bySpan := make(map[semanticSpanKey]semanticAbsToken)
-	for match, captureIndex := captures.Next(); match != nil; match, captureIndex = captures.Next() {
-		if err := ctx.Err(); err != nil {
-			return SemanticTokens{}, err
-		}
-		if captureIndex >= uint(len(match.Captures)) {
-			continue
-		}
-		capture := match.Captures[captureIndex]
-		if capture.Index >= captureNameCount {
-			continue
-		}
-		spec, ok := semanticCaptureMapping(captureNames[capture.Index])
-		if !ok {
-			continue
-		}
-		sp := tsNodeSpan(capture.Node)
-		if !sp.IsValid() || sp.IsEmpty() {
-			continue
-		}
-		segments, err := semanticLineSegments(tree.Source, sp)
-		if err != nil {
-			return SemanticTokens{}, err
-		}
-		for _, seg := range segments {
-			tok, ok, err := semanticTokenForSpan(tree.LineIndex, seg, spec)
-			if err != nil {
-				return SemanticTokens{}, err
-			}
-			if !ok {
+	bySpan := make(map[semanticSpanKey]semanticAbsToken, len(tree.Tokens))
+	for i := range tree.Tokens {
+		tok := tree.Tokens[i]
+		for _, tr := range tok.Leading {
+			if !isCommentTrivia(tr.Kind) {
 				continue
 			}
-			key := semanticSpanKey{line: tok.line, startChar: tok.startChar, length: tok.length}
-			if prev, exists := bySpan[key]; exists && prev.priority >= tok.priority {
-				continue
-			}
-			bySpan[key] = tok
+			addTokenSpans(bySpan, tree.Source, tree.LineIndex, tr.Span, "comment", nil)
 		}
+
+		tokenType := semanticTokenKindForToken(tree.Tokens, i)
+		if tokenType == "" {
+			continue
+		}
+		addTokenSpans(bySpan, tree.Source, tree.LineIndex, tok.Span, tokenType, nil)
 	}
 
 	if len(bySpan) == 0 {
@@ -184,94 +117,126 @@ func lspSemanticTokensFromSyntax(ctx context.Context, tree *syntax.Tree) (Semant
 		return abs[i].modBits < abs[j].modBits
 	})
 
-	data := encodeSemanticTokens(abs)
-	return SemanticTokens{Data: data}, nil
+	return SemanticTokens{Data: encodeSemanticTokens(abs)}, nil
 }
 
-func semanticCaptureMapping(name string) (semanticCaptureSpec, bool) {
-	switch name {
-	case "comment":
-		return semanticCaptureSpec{tokenType: "comment", priority: 10}, true
-	case "string":
-		return semanticCaptureSpec{tokenType: "string", priority: 10}, true
-	case "string.special":
-		return semanticCaptureSpec{tokenType: "string", priority: 20}, true
-	case "number", "number.float":
-		return semanticCaptureSpec{tokenType: "number", priority: 10}, true
-	case "constant.builtin.boolean":
-		return semanticCaptureSpec{tokenType: "keyword", modifiers: []string{"defaultLibrary"}, priority: 20}, true
-	case "keyword":
-		return semanticCaptureSpec{tokenType: "keyword", priority: 5}, true
-	case "type.builtin":
-		return semanticCaptureSpec{tokenType: "type", modifiers: []string{"defaultLibrary"}, priority: 25}, true
-	case "type.definition":
-		return semanticCaptureSpec{tokenType: "type", modifiers: []string{"declaration"}, priority: 30}, true
-	case "function":
-		return semanticCaptureSpec{tokenType: "method", priority: 30}, true
-	case "property":
-		return semanticCaptureSpec{tokenType: "property", priority: 30}, true
-	case "attribute":
-		return semanticCaptureSpec{tokenType: "decorator", priority: 30}, true
-	case "constant":
-		return semanticCaptureSpec{tokenType: "variable", modifiers: []string{"declaration", "readonly"}, priority: 30}, true
+func isCommentTrivia(kind lexer.TriviaKind) bool {
+	//exhaustive:ignore Trivia whitespace/newline are non-comment cases.
+	switch kind {
+	case lexer.TriviaHashComment, lexer.TriviaLineComment, lexer.TriviaBlockComment, lexer.TriviaDocComment:
+		return true
 	default:
-		return semanticCaptureSpec{}, false
+		return false
 	}
 }
 
-func semanticTokenForSpan(li *itext.LineIndex, sp itext.Span, spec semanticCaptureSpec) (semanticAbsToken, bool, error) {
-	if li == nil {
-		return semanticAbsToken{}, false, errors.New("nil line index")
-	}
-	start, err := li.OffsetToUTF16Position(sp.Start)
-	if err != nil {
-		return semanticAbsToken{}, false, err
-	}
-	end, err := li.OffsetToUTF16Position(sp.End)
-	if err != nil {
-		return semanticAbsToken{}, false, err
-	}
-	if start.Line != end.Line {
-		return semanticAbsToken{}, false, errors.New("semantic token span crosses lines")
-	}
-	if end.Character <= start.Character {
-		return semanticAbsToken{}, false, nil
+func semanticTokenKindForToken(tokens []lexer.Token, i int) string {
+	tok := tokens[i]
+	//exhaustive:ignore Only token kinds mapped to semantic tokens are handled.
+	switch tok.Kind {
+	case lexer.TokenStringLiteral:
+		return "string"
+	case lexer.TokenIntLiteral, lexer.TokenFloatLiteral:
+		return "number"
 	}
 
-	typeIdx, ok := semanticTokenTypeIndex[spec.tokenType]
-	if !ok {
-		return semanticAbsToken{}, false, nil
+	if isKeywordToken(tok.Kind) {
+		if isBuiltinTypeToken(tok.Kind) {
+			return "type"
+		}
+		return "keyword"
 	}
-	modBits := uint32(0)
-	for _, mod := range spec.modifiers {
-		idx, ok := semanticTokenModIndex[mod]
+
+	if tok.Kind == lexer.TokenIdentifier && isMethodIdentifier(tokens, i) {
+		return "method"
+	}
+	return ""
+}
+
+func isKeywordToken(kind lexer.TokenKind) bool {
+	return kind >= lexer.TokenKwInclude && kind <= lexer.TokenKwFalse
+}
+
+func isBuiltinTypeToken(kind lexer.TokenKind) bool {
+	//exhaustive:ignore Only builtin type token kinds are handled.
+	switch kind {
+	case lexer.TokenKwVoid, lexer.TokenKwBool, lexer.TokenKwByte, lexer.TokenKwi8, lexer.TokenKwi16,
+		lexer.TokenKwi32, lexer.TokenKwi64, lexer.TokenKwDouble, lexer.TokenKwString,
+		lexer.TokenKwBinary, lexer.TokenKwUUID, lexer.TokenKwMap, lexer.TokenKwList, lexer.TokenKwSet:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMethodIdentifier(tokens []lexer.Token, i int) bool {
+	if i <= 0 || i+1 >= len(tokens) {
+		return false
+	}
+	if tokens[i].Kind != lexer.TokenIdentifier || tokens[i+1].Kind != lexer.TokenLParen {
+		return false
+	}
+
+	// Method declarations follow a return type token and then an identifier + '('.
+	prev := tokens[i-1].Kind
+	return prev == lexer.TokenIdentifier || isBuiltinTypeToken(prev)
+}
+
+func addTokenSpans(bySpan map[semanticSpanKey]semanticAbsToken, src []byte, li *itext.LineIndex, sp itext.Span, tokenType string, modifiers []string) {
+	typeIdx, ok := semanticTokenTypeIndex[tokenType]
+	if !ok {
+		return
+	}
+	modBits := modifierBits(modifiers)
+	segments, err := semanticLineSegments(src, sp)
+	if err != nil {
+		return
+	}
+	for _, seg := range segments {
+		tok, ok := semanticTokenForSpan(li, seg, typeIdx, modBits)
 		if !ok {
 			continue
 		}
-		modBits |= 1 << idx
+		bySpan[semanticSpanKey(tok)] = tok
+	}
+}
+
+func semanticTokenForSpan(li *itext.LineIndex, sp itext.Span, tokenType uint32, modBits uint32) (semanticAbsToken, bool) {
+	if li == nil || !sp.IsValid() || sp.IsEmpty() {
+		return semanticAbsToken{}, false
+	}
+	start, err := li.OffsetToUTF16Position(sp.Start)
+	if err != nil {
+		return semanticAbsToken{}, false
+	}
+	end, err := li.OffsetToUTF16Position(sp.End)
+	if err != nil {
+		return semanticAbsToken{}, false
+	}
+	if start.Line != end.Line || end.Character <= start.Character {
+		return semanticAbsToken{}, false
 	}
 
 	line, ok := uint32FromNonNegativeInt(start.Line)
 	if !ok {
-		return semanticAbsToken{}, false, nil
+		return semanticAbsToken{}, false
 	}
 	startChar, ok := uint32FromNonNegativeInt(start.Character)
 	if !ok {
-		return semanticAbsToken{}, false, nil
+		return semanticAbsToken{}, false
 	}
 	length, ok := uint32FromNonNegativeInt(end.Character - start.Character)
 	if !ok || length == 0 {
-		return semanticAbsToken{}, false, nil
+		return semanticAbsToken{}, false
 	}
 
 	return semanticAbsToken{
 		line:      line,
 		startChar: startChar,
 		length:    length,
-		tokenType: typeIdx,
+		tokenType: tokenType,
 		modBits:   modBits,
-		priority:  spec.priority,
-	}, true, nil
+	}, true
 }
 
 func semanticLineSegments(src []byte, sp itext.Span) ([]itext.Span, error) {
@@ -331,29 +296,32 @@ func encodeSemanticTokens(tokens []semanticAbsToken) []uint32 {
 	return data
 }
 
-func tsNodeSpan(n sitter.Node) itext.Span {
-	start := tsByteOffsetToInt(n.StartByte())
-	end := tsByteOffsetToInt(n.EndByte())
-	return itext.Span{Start: itext.ByteOffset(start), End: itext.ByteOffset(end)}
-}
-
-func tsByteOffsetToInt(v uint) int {
-	if uint64(v) > uint64(math.MaxInt) {
-		return math.MaxInt
+func modifierBits(modifiers []string) uint32 {
+	modBits := uint32(0)
+	for _, mod := range modifiers {
+		idx, ok := semanticTokenModIndex[mod]
+		if !ok {
+			continue
+		}
+		modBits |= 1 << idx
 	}
-	return int(v)
+	return modBits
 }
 
 func indexStringsUint32(in []string) map[string]uint32 {
 	out := make(map[string]uint32, len(in))
-	for i, s := range in {
-		out[s] = uint32(i)
+	for i, value := range in {
+		idx, ok := uint32FromNonNegativeInt(i)
+		if !ok {
+			continue
+		}
+		out[value] = idx
 	}
 	return out
 }
 
 func uint32FromNonNegativeInt(v int) (uint32, bool) {
-	if v < 0 || uint64(v) > uint64(math.MaxUint32) {
+	if v < 0 || v > math.MaxUint32 {
 		return 0, false
 	}
 	return uint32(v), true

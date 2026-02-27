@@ -1,4 +1,4 @@
-//go:build !cgo || !thriftweaver_cgo
+//go:build cgo && thriftweaver_cgo
 
 package syntax
 
@@ -9,5 +9,5 @@ func kindName(kind NodeKind) string {
 	if lang == nil {
 		return ""
 	}
-	return lang.NodeKindForID(uint16(kind))
+	return lang.NodeKindForId(uint16(kind))
 }
