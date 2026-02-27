@@ -1,4 +1,13 @@
-# thrift-weaver
+<h3 align="center">
+	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="100" alt="Logo"/><br/>
+	Thrift Weaver for <a href="https://code.visualstudio.com">VSCode</a>
+</h3>
+
+<p align="center">
+    <a href="https://github.com/kpumuk/thrift-weaver/stargazers"><img src="https://img.shields.io/github/stars/kpumuk/thrift-weaver?colorA=363a4f&colorB=b7bdf8&style=for-the-badge"></a>
+    <a href="https://github.com/kpumuk/thrift-weaver/issues"><img src="https://img.shields.io/github/issues/kpumuk/thrift-weaver?colorA=363a4f&colorB=f5a97f&style=for-the-badge"></a>
+    <a href="https://github.com/kpumuk/thrift-weaver/contributors"><img src="https://img.shields.io/github/contributors/kpumuk/thrift-weaver?colorA=363a4f&colorB=a6da95&style=for-the-badge"></a>
+</p>
 
 `thrift-weaver` helps you write and format Thrift IDL files.
 
@@ -17,9 +26,22 @@ It is made for daily editor use. It keeps comments. It stays stable. It can hand
 
 - One stack for CLI and editor use.
 - Safe mode: if format is not safe, the tool returns an error.
-- Pinned tools with `mise` for local and CI runs.
 
-## Install And Build
+## Usage
+
+### Preferred method of installation
+
+Install the extension from a Marketplace:
+
+- [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=kpumuk.thrift-weaver-vscode)
+
+### Manual method for installation
+
+Download the VSIX from
+[the latest GitHub release](https://github.com/kpumuk/thrift-weaver/releases/latest).
+Open the Command Palette and select "Extensions: Install from VSIX...", then open the file you just downloaded.
+
+## Local Installation
 
 ### Needs
 
