@@ -244,7 +244,6 @@ thrift-weaver/
     bootstrap.sh
     generate-tree-sitter.sh
     sync-thrift-corpus.sh
-    release-binaries.sh
 ```
 
 ## Module Boundaries and Responsibilities

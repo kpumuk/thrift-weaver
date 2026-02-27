@@ -6,4 +6,4 @@ GRAMMAR_DIR="$ROOT_DIR/grammar/tree-sitter-thrift"
 
 cd "$GRAMMAR_DIR"
 
-tree-sitter generate
+mise exec tree-sitter -- tree-sitter generate
