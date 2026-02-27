@@ -29,6 +29,7 @@ Notes:
 git clone https://github.com/kpumuk/thrift-weaver.git
 cd thrift-weaver
 mise install
+mise run grammars
 
 go build -o thriftfmt ./cmd/thriftfmt
 go build -o thriftls ./cmd/thriftls

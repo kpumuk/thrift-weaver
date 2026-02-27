@@ -191,6 +191,29 @@ jobs:
         run: |
           git diff --exit-code -- grammar/tree-sitter-thrift/src
 
+  wasm-grammar-drift:
+    name: wasm-grammar-drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Regenerate tree-sitter wasm grammar
+        run: scripts/generate-tree-sitter-wasm.sh
+
+      - name: Verify wasm artifact checksum
+        run: scripts/verify-tree-sitter-wasm.sh
+
+      - name: Check generated wasm grammar drift
+        run: |
+          git diff --exit-code -- internal/grammars/thrift/thrift.wasm internal/grammars/thrift/thrift.wasm.sha256
+
   thrift-oracle-compat:
     name: thrift-oracle-compat
     if: ${{ vars.THRIFT_ORACLE_VERSION_PREFIX != '' }}

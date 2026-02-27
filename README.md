@@ -190,6 +190,7 @@ If you change behavior or policy, update [RFC 0001](docs/rfcs/0001-thrift-toolin
 - [RFC 0001](docs/rfcs/0001-thrift-tooling-platform.md)
 - [User Guide](docs/user-guide.md)
 - [Architecture Overview](docs/architecture.md)
+- [WASM Grammar Build Pipeline](docs/wasm-grammar-build.md)
 - [Performance Benchmarks](docs/performance.md)
 - [Robustness (fuzzing and race tests)](docs/robustness.md)
 - [Release Process](docs/release.md)
