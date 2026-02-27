@@ -10,7 +10,6 @@ import (
 	sitter "github.com/tree-sitter/go-tree-sitter"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
-	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
 	"github.com/kpumuk/thrift-weaver/internal/text"
 )
 
@@ -25,7 +24,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 
 	lexRes := lexer.Lex(src)
 
-	parser, err := ts.NewParser()
+	parser, err := currentParserFactory().NewParser()
 	if err != nil {
 		return nil, fmt.Errorf("init parser: %w", err)
 	}
