@@ -17,11 +17,11 @@ alias = "fmt"
 
 [tasks.lint]
 description = "Run golangci-lint"
-run = "golangci-lint run"
+run = "golangci-lint run ./cmd/... ./grammar/... ./internal/... ./scripts/..."
 
 [tasks.test]
 description = "Run Go tests"
-run = "go test ./..."
+run = "go test ./cmd/... ./grammar/... ./internal/... ./scripts/..."
 
 [tasks.test-race-lsp]
 description = "Run race detector for LSP/document-store packages"

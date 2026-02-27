@@ -6,6 +6,20 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(extensionRoot, '..', '..');
+const requestTimeoutMs = readTimeoutEnv('THRIFT_SMOKE_REQUEST_TIMEOUT_MS', 60000);
+const notificationTimeoutMs = readTimeoutEnv('THRIFT_SMOKE_NOTIFICATION_TIMEOUT_MS', 60000);
+
+function readTimeoutEnv(name, fallbackMs) {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallbackMs;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallbackMs;
+  }
+  return Math.trunc(parsed);
+}
 
 class LspPeer {
   constructor(proc) {
@@ -72,7 +86,7 @@ class LspPeer {
     this.proc.stdin.write(json);
   }
 
-  request(method, params) {
+  request(method, params, timeoutMs = requestTimeoutMs) {
     const id = this.nextID++;
     const msg = {
       jsonrpc: '2.0',
@@ -85,7 +99,7 @@ class LspPeer {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`request timeout for ${method}`));
-      }, 10000);
+      }, timeoutMs);
       this.pending.set(id, (response) => {
         clearTimeout(timer);
         resolve(response);
@@ -101,7 +115,7 @@ class LspPeer {
     });
   }
 
-  waitForNotification(method, timeoutMs = 10000) {
+  waitForNotification(method, timeoutMs = notificationTimeoutMs) {
     const existing = this.notifications.find((msg) => msg.method === method);
     if (existing) {
       return Promise.resolve(existing);
