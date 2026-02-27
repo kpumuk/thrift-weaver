@@ -9,6 +9,8 @@ import {
   Trace,
   TransportKind,
 } from 'vscode-languageclient/node.js';
+import { installManagedThriftls } from './managedInstall';
+import { resolveServerPath } from './serverPathResolver';
 
 type TraceLevel = 'off' | 'messages' | 'verbose';
 
@@ -17,6 +19,9 @@ type ThriftConfig = {
   serverArgs: string[];
   lineWidth: number;
   traceServer: TraceLevel;
+  managedInstallEnabled: boolean;
+  managedManifestURL: string;
+  managedAllowInsecureHTTP: boolean;
 };
 
 let outputChannel: vscode.OutputChannel | undefined;
@@ -87,19 +92,44 @@ async function restartLanguageClient(context: vscode.ExtensionContext, reason: s
 
 async function startLanguageClient(context: vscode.ExtensionContext, reason: string): Promise<void> {
   const config = readThriftConfig();
-  if (config.serverPath === '') {
-    await notifyMissingServerPath();
-    logInfo(`language server not started (${reason}): thrift.server.path is empty`);
+  const resolved = await resolveServerPath(
+    {
+      externalPath: config.serverPath,
+      managedEnabled: config.managedInstallEnabled,
+    },
+    {
+      externalPathExists: fs.existsSync,
+      installManaged: async () =>
+        installManagedThriftls(
+          {
+            manifestURL: config.managedManifestURL,
+            storageDir: context.globalStorageUri.fsPath,
+            allowInsecureHTTP: config.managedAllowInsecureHTTP,
+          },
+          {
+            log: (message) => logInfo(message),
+          },
+        ),
+    },
+  );
+
+  if (resolved.source === 'none') {
+    if (resolved.managedError) {
+      await notifyManagedInstallFailure(formatError(resolved.managedError));
+      logError(`language server not started (${reason}): managed install failed: ${formatError(resolved.managedError)}`);
+      return;
+    }
+    await notifyMissingServerPath(config.managedInstallEnabled);
+    logInfo(`language server not started (${reason}): no managed or external server path available`);
     return;
   }
-  if (!fs.existsSync(config.serverPath)) {
-    await notifyServerStartFailure(`Configured thrift.server.path does not exist: ${config.serverPath}`);
-    logError(`language server not started (${reason}): path not found: ${config.serverPath}`);
-    return;
+  if (resolved.source === 'external' && resolved.managedError) {
+    await notifyManagedInstallFallback(formatError(resolved.managedError), resolved.path);
+    logError(`managed install failed; using external thriftls fallback: ${resolved.path}`);
   }
 
   const serverOptions: ServerOptions = {
-    command: config.serverPath,
+    command: resolved.path,
     args: config.serverArgs,
     transport: TransportKind.stdio,
   };
@@ -127,7 +157,7 @@ async function startLanguageClient(context: vscode.ExtensionContext, reason: str
 
   try {
     logInfo(
-      `starting language server (${reason}): ${config.serverPath}${
+      `starting language server (${reason}, source=${resolved.source}): ${resolved.path}${
         config.serverArgs.length > 0 ? ` ${config.serverArgs.join(' ')}` : ''
       }`,
     );
@@ -169,6 +199,12 @@ function readThriftConfig(): ThriftConfig {
   const argsValue = cfg.get<unknown[]>('server.args', []);
   const lineWidthValue = cfg.get<number>('format.lineWidth', 100);
   const traceValue = cfg.get<string>('trace.server', 'off');
+  const managedInstallEnabled = cfg.get<boolean>('managedInstall.enabled', true);
+  const managedManifestURL = cfg.get<string>(
+    'managedInstall.manifestUrl',
+    'https://github.com/kpumuk/thrift-weaver/releases/latest/download/thriftls-manifest.json',
+  );
+  const managedAllowInsecureHTTP = cfg.get<boolean>('managedInstall.allowInsecureHttp', false);
 
   const serverArgs = Array.isArray(argsValue)
     ? argsValue.filter((v): v is string => typeof v === 'string')
@@ -181,16 +217,22 @@ function readThriftConfig(): ThriftConfig {
     serverArgs,
     lineWidth,
     traceServer,
+    managedInstallEnabled,
+    managedManifestURL: managedManifestURL.trim(),
+    managedAllowInsecureHTTP,
   };
 }
 
-async function notifyMissingServerPath(): Promise<void> {
+async function notifyMissingServerPath(managedInstallEnabled: boolean): Promise<void> {
   if (warnedMissingServerPath) {
     return;
   }
   warnedMissingServerPath = true;
+  const details = managedInstallEnabled
+    ? 'Managed install was enabled but no server could be installed.'
+    : 'Managed install is disabled.';
   const action = await vscode.window.showWarningMessage(
-    'Thrift Weaver: set `thrift.server.path` to a thriftls binary to enable diagnostics and formatting. Managed install will be added in a later milestone.',
+    `Thrift Weaver: set \`thrift.server.path\` to a thriftls binary to enable diagnostics and formatting. ${details}`,
     openSettingsAction,
   );
   await maybeOpenThriftServerPathSettings(action);
@@ -198,6 +240,22 @@ async function notifyMissingServerPath(): Promise<void> {
 
 async function notifyServerStartFailure(message: string): Promise<void> {
   const action = await vscode.window.showErrorMessage(message, openSettingsAction);
+  await maybeOpenThriftServerPathSettings(action);
+}
+
+async function notifyManagedInstallFailure(message: string): Promise<void> {
+  const action = await vscode.window.showErrorMessage(
+    `Thrift Weaver: managed thriftls install failed: ${message}. Configure thrift.server.path as a fallback.`,
+    openSettingsAction,
+  );
+  await maybeOpenThriftServerPathSettings(action);
+}
+
+async function notifyManagedInstallFallback(message: string, fallbackPath: string): Promise<void> {
+  const action = await vscode.window.showWarningMessage(
+    `Thrift Weaver: managed thriftls install failed (${message}). Using configured thrift.server.path: ${fallbackPath}.`,
+    openSettingsAction,
+  );
   await maybeOpenThriftServerPathSettings(action);
 }
 

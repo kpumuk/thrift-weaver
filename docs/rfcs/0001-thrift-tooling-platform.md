@@ -840,7 +840,7 @@ Implementation note:
 - Register `thrift` language
 - Provide TextMate syntax highlighting (`syntaxes/thrift.tmLanguage.json`)
 - Start `thriftls` via `vscode-languageclient`
-- Manage `thriftls` installation/version selection (gopls-style tool management) or use user-provided path
+- Manage `thriftls` installation/version selection (managed install tool flow) or use user-provided path
 - Route formatting requests to LSP
 - Expose settings:
   - `thrift.server.path`
@@ -854,11 +854,11 @@ Non-goal in v1:
 
 ### Binary Packaging Strategy
 
-v1 decision (gopls-style):
+v1 decision (managed install):
 
 - Do not bundle `thriftls` binaries inside the `.vsix` by default.
 - Publish per-platform `thriftls` binaries as release artifacts.
-- VS Code extension downloads/installs the matching `thriftls` binary on demand (or via explicit command), similar to `gopls` tool installation flows.
+- VS Code extension downloads/installs the matching `thriftls` binary on demand (or via explicit command), similar to established Go tool installation flows.
 - Store managed binaries in extension-managed storage/cache.
 - Allow override via user-specified external path (`thrift.server.path`).
 - Optional in v1 if CI/toolchain is ready: Windows `arm64` artifact publication.
@@ -1151,7 +1151,7 @@ Scope:
 
 - syntax highlighting
 - LSP client integration
-- server binary management/install flow (gopls-style)
+- server binary management/install flow (managed install)
 
 Acceptance criteria:
 
@@ -1195,7 +1195,7 @@ Acceptance criteria:
 Remaining non-blocking question (can be decided in M3/M4):
 
 6. Linux managed binary compatibility policy for VS Code extension:
-   - Resolved direction: follow `gopls`-style managed install/distribution patterns rather than bundling.
+   - Resolved direction: follow managed install/distribution patterns rather than bundling.
    - Remaining detail (M3/M4): define Linux binary baseline(s) and fallback guidance (`glibc` floor and/or alternate artifacts).
 
 No M0-blocking open questions remain.
@@ -1235,7 +1235,7 @@ Rejected because editor integration is a primary requirement and affects parser 
 
 1. Implement engine and CLI first (`thriftfmt`) to stabilize formatting semantics.
 2. Add `thriftls` on top of same engine.
-3. Ship VS Code extension with gopls-style managed `thriftls` install (plus external-path fallback).
+3. Ship VS Code extension with managed `thriftls` install (plus external-path fallback).
 4. Iterate on editor features (semantic tokens, code actions, navigation).
 
 ## Appendix: Initial Implementation Order (Detailed)

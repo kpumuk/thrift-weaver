@@ -39,8 +39,11 @@
     "compile": "npm run bundle",
     "watch": "node ./scripts/bundle.mjs --watch",
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
+    "test:unit": "tsx --test src/**/*.test.ts",
     "test:syntax": "node ./scripts/test-syntax.mjs",
-    "test": "npm run typecheck && npm run test:syntax",
+    "test:lsp-smoke": "node ./scripts/test-lsp-smoke.mjs",
+    "test:extension-smoke": "node ./scripts/test-extension-smoke.mjs",
+    "test": "npm run typecheck && npm run test:unit && npm run test:extension-smoke",
     "package": "vsce package"
   },
   "contributes": {
@@ -108,18 +111,37 @@
             "verbose"
           ],
           "markdownDescription": "LSP protocol tracing level for the Thrift language server."
+        },
+        "thrift.managedInstall.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable managed install for `thriftls` when available."
+        },
+        "thrift.managedInstall.manifestUrl": {
+          "type": "string",
+          "default": "https://github.com/kpumuk/thrift-weaver/releases/latest/download/thriftls-manifest.json",
+          "markdownDescription": "URL for `thriftls` managed-install manifest."
+        },
+        "thrift.managedInstall.allowInsecureHttp": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Allow non-HTTPS URLs for managed install (for local testing only)."
         }
       }
     }
   },
   "dependencies": {
+    "adm-zip": "^0.5.16",
+    "tar": "^7.5.2",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "@vscode/vsce": "^3.7.1",
     "@types/node": "^25.3.0",
     "@types/vscode": "^1.90.0",
     "esbuild": "^0.27.3",
+    "tsx": "^4.20.5",
     "typescript": "^5.7.3",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.2.1"

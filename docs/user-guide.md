@@ -8,8 +8,7 @@ This document covers how to use:
 
 Beta status:
 - `thriftfmt` and `thriftls` are usable now
-- VS Code extension supports external `thriftls` path today
-- gopls-style managed `thriftls` install is planned (release artifacts/manifest/checksums are already produced)
+- VS Code extension supports both managed `thriftls` install and external `thriftls` path fallback
 
 ## Install / Build
 
@@ -143,8 +142,9 @@ code --install-extension thrift-weaver-vscode-<version>.vsix --force
 ### Configure `thriftls`
 
 Current beta behavior:
-- set `thrift.server.path` to a local `thriftls` binary
-- when empty, the extension warns (managed install is planned but not implemented yet)
+- managed install is enabled by default and attempts to download/install `thriftls` using the configured manifest
+- if managed install fails and `thrift.server.path` is configured, the extension falls back to that external binary
+- if both managed install and external path are unavailable, the extension shows an actionable warning/error
 
 Useful settings:
 
@@ -152,6 +152,9 @@ Useful settings:
 - `thrift.server.args`: extra args for `thriftls`
 - `thrift.format.lineWidth`: preferred formatter width (forwarded by extension; server support may evolve)
 - `thrift.trace.server`: LSP trace (`off`, `messages`, `verbose`)
+- `thrift.managedInstall.enabled`: enable/disable managed `thriftls` install
+- `thrift.managedInstall.manifestUrl`: manifest URL used by managed install
+- `thrift.managedInstall.allowInsecureHttp`: allow non-HTTPS URLs for local/testing use only
 
 Extension defaults for Thrift files:
 
@@ -182,7 +185,7 @@ If the extension command is missing or features are not working:
 
 ## Managed Install vs External Path (Beta Guidance)
 
-### External path (supported today)
+### External path
 
 Use `thrift.server.path` and manage the binary yourself.
 
@@ -193,14 +196,15 @@ Best for:
 - enterprise/internal mirrors
 - controlled rollout/pinning outside the extension
 
-### Managed install (planned)
+### Managed install
 
-Planned behavior (gopls-style):
+Managed behavior:
 
 - extension downloads a matching `thriftls` binary on demand
 - selects artifact via `thriftls-manifest.json`
 - verifies SHA-256 checksum before install
 - preserves last-known-good binary on failed update
+- falls back to `thrift.server.path` when configured and managed install fails
 
 Release pipeline support already exists:
 
@@ -211,8 +215,8 @@ Release pipeline support already exists:
 
 Implementation status in extension:
 
-- not yet shipped in current beta build
-- use external path for now
+- shipped in current beta build
+- external path remains fully supported for pinned/offline/internal workflows
 
 ## Linux Compatibility (Managed Binary Policy)
 
