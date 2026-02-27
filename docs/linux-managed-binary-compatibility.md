@@ -1,10 +1,10 @@
 # Linux Managed `thriftls` Binary Compatibility Policy (Beta)
 
-This document defines the Linux compatibility policy for the VS Code extension's planned managed `thriftls` install flow.
+This document defines the Linux compatibility policy for the VS Code extension's managed `thriftls` install flow.
 
 Status:
-- Managed install is planned (not yet enabled in the extension)
-- This policy governs release artifacts and user guidance in preparation for that feature
+- Managed install is enabled in the extension by default
+- This policy governs release artifacts and user guidance for current managed-install behavior
 
 ## Scope
 
