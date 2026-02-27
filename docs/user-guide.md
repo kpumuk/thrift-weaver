@@ -117,6 +117,11 @@ When that happens it prints:
 
 ### Install the extension
 
+Marketplace installs:
+
+- Visual Studio Marketplace: https://marketplace.visualstudio.com/items?itemName=kpumuk.thrift-weaver-vscode
+- Open VSX Registry: https://open-vsx.org/extension/kpumuk/thrift-weaver-vscode
+
 Prepare the extension build:
 
 ```bash

@@ -149,3 +149,33 @@ jobs:
             exit 1
           fi
           npx --yes @vscode/vsce publish --packagePath "$vsix_path" -p "$VSCE_PAT"
+
+  publish-open-vsx:
+    name: publish-open-vsx
+    runs-on: ubuntu-latest
+    needs:
+      - package-vscode-extension
+      - goreleaser
+    environment: release
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: vscode-vsix
+          path: .release-extra
+
+      - name: Publish extension to Open VSX Registry
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          vsix_path="$(ls .release-extra/*.vsix | head -n1)"
+          if [ -z "$vsix_path" ]; then
+            echo "VSIX artifact not found" >&2
+            exit 1
+          fi
+          npx --yes ovsx publish "$vsix_path" -p "$OVSX_PAT" --skip-duplicate

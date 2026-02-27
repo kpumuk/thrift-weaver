@@ -28,7 +28,13 @@ Thrift Weaver adds Thrift support to VS Code.
 
 Marketplace page: [Thrift Weaver](https://marketplace.visualstudio.com/items?itemName=kpumuk.thrift-weaver-vscode)
 
-### Option 2: Install `.vsix`
+### Option 2: Open VSX Registry
+
+Install from Open VSX (useful for VS Code-compatible editors like VSCodium):
+
+[Thrift Weaver on Open VSX](https://open-vsx.org/extension/kpumuk/thrift-weaver-vscode)
+
+### Option 3: Install `.vsix`
 
 ```bash
 code --install-extension thrift-weaver-vscode-<version>.vsix --force

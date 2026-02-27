@@ -34,6 +34,7 @@ It is made for daily editor use. It keeps comments. It stays stable. It can hand
 Install the extension from a Marketplace:
 
 - [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=kpumuk.thrift-weaver-vscode)
+- [Open VSX Registry](https://open-vsx.org/extension/kpumuk/thrift-weaver-vscode)
 
 ### Manual method for installation
 
