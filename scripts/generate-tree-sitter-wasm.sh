@@ -47,7 +47,11 @@ fi
 # 1) tree-sitter core runtime C sources,
 # 2) thrift grammar parser.c,
 # 3) our wrapper ABI used by internal/syntax/treesitter/parser.go.
+SOURCE_DATE_EPOCH=0 \
 "$WASI_CLANG" --target=wasm32-wasi -D__EMSCRIPTEN__ -mexec-model=reactor \
+  -g0 \
+  "-fdebug-prefix-map=$ROOT_DIR=." \
+  -fdebug-compilation-dir=. \
   -I "$TREE_SITTER_CORE_DIR/include" \
   -I "$TREE_SITTER_CORE_DIR/src" \
   -I "$GRAMMAR_SRC_DIR" \
@@ -57,6 +61,8 @@ fi
   -o "$WASM_PATH" \
   -O2 \
   -Wl,--no-entry \
+  -Wl,--strip-all \
+  -Wl,--build-id=none \
   -Wl,-z,stack-size=65536 \
   -Wl,--export=malloc \
   -Wl,--export=free \
