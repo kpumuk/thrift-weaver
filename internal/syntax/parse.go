@@ -27,13 +27,253 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init parser: %w", err)
 	}
-	defer parser.Close()
-
 	rawTree, err := parser.Parse(ctx, src, nil)
+	if err != nil {
+		parser.Close()
+		return nil, err
+	}
+	out, err := buildSyntaxTreeFromRawWithLexResult(src, opts, rawTree, lexRes)
+	if err != nil {
+		rawTree.Close()
+		parser.Close()
+		return nil, err
+	}
+	adoptRuntimeTree(out, &parseRuntimeState{
+		parser:             parser,
+		rawTree:            rawTree,
+		incrementalEnabled: true,
+	})
+	emitReparseEvent(ReparseEvent{Mode: "full"})
+
+	if err := ctx.Err(); err != nil {
+		out.closeRuntime()
+		return nil, err
+	}
+	return out, nil
+}
+
+// Reparse reparses from scratch when no incremental edit set is available.
+func Reparse(ctx context.Context, old *Tree, src []byte, opts ParseOptions) (*Tree, error) {
+	return ApplyIncrementalEditsAndReparse(ctx, old, src, opts, nil)
+}
+
+// ApplyIncrementalEditsAndReparse applies edits, reparses with old-tree reuse, and verifies consistency.
+func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte, opts ParseOptions, edits []InputEdit) (*Tree, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if old == nil {
+		return Parse(ctx, src, opts)
+	}
+	if err := validateIncrementalEdits(edits, len(old.Source)); err != nil {
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", FallbackReason: "invalid_edit"},
+			"incremental edit validation failed; using full parse",
+		)
+	}
+	if len(edits) == 0 {
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, FallbackReason: "no_edits"},
+			"",
+		)
+	}
+
+	state := runtimeStateFromTree(old)
+	if errNoIncrementalState(old) != nil {
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, FallbackReason: "no_runtime_state"},
+			"incremental parser state unavailable; using full parse",
+		)
+	}
+	if !state.incrementalEnabled {
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, FallbackReason: "incremental_disabled"},
+			"incremental mode disabled for this document; using full parse",
+		)
+	}
+
+	for _, edit := range edits {
+		if err := state.rawTree.ApplyEdit(ctx, toTSEdit(edit)); err != nil {
+			state.incrementalEnabled = false
+			return fallbackIncrementalReparse(
+				ctx,
+				old,
+				src,
+				opts,
+				ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, FallbackReason: "tree_edit_failed"},
+				"incremental tree edit failed; using full parse",
+			)
+		}
+	}
+
+	incrementalRaw, err := state.parser.Parse(ctx, src, state.rawTree)
+	if err != nil {
+		state.incrementalEnabled = false
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, AppliedTreeEdits: len(edits), FallbackReason: "parse_with_old_failed"},
+			"incremental parse failed; using full parse",
+		)
+	}
+
+	changed, err := state.rawTree.ChangedRanges(ctx, incrementalRaw)
+	if err != nil {
+		incrementalRaw.Close()
+		state.incrementalEnabled = false
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, AppliedTreeEdits: len(edits), FallbackReason: "changed_ranges_failed"},
+			"changed-range extraction failed; using full parse",
+		)
+	}
+	changedSpans, err := spansFromChangedRanges(changed)
+	if err != nil || validateChangedRanges(changedSpans, len(src)) != nil {
+		incrementalRaw.Close()
+		state.incrementalEnabled = false
+		return fallbackIncrementalReparse(
+			ctx,
+			old,
+			src,
+			opts,
+			ReparseEvent{Mode: "fallback_full", ProvidedOldTree: true, AppliedTreeEdits: len(edits), FallbackReason: "changed_ranges_invalid"},
+			"changed-range verification failed; using full parse",
+		)
+	}
+
+	out, err := buildSyntaxTreeFromRaw(src, opts, incrementalRaw)
+	if err != nil {
+		incrementalRaw.Close()
+		return nil, err
+	}
+	out.ChangedRanges = changedSpans
+
+	nextState := &parseRuntimeState{
+		parser:             state.parser,
+		rawTree:            incrementalRaw,
+		incrementalEnabled: state.incrementalEnabled,
+		reparseCount:       state.reparseCount + 1,
+	}
+	adoptRuntimeTree(out, nextState)
+
+	verificationRun, verifiedTree, err := verifyIncrementalReparse(ctx, out, nextState, src, opts)
 	if err != nil {
 		return nil, err
 	}
-	defer rawTree.Close()
+	if verifiedTree != nil {
+		if state.rawTree != nil {
+			state.rawTree.Close()
+			state.rawTree = nil
+		}
+		old.runtime = nil
+		emitReparseEvent(ReparseEvent{
+			Mode:               "incremental",
+			ProvidedOldTree:    true,
+			AppliedTreeEdits:   len(edits),
+			ChangedRangeCount:  len(changedSpans),
+			VerificationRun:    true,
+			VerificationFailed: true,
+		})
+		return verifiedTree, nil
+	}
+
+	if state.rawTree != nil {
+		state.rawTree.Close()
+		state.rawTree = nil
+	}
+	old.runtime = nil
+	emitReparseEvent(ReparseEvent{
+		Mode:              "incremental",
+		ProvidedOldTree:   true,
+		AppliedTreeEdits:  len(edits),
+		ChangedRangeCount: len(changedSpans),
+		VerificationRun:   verificationRun,
+	})
+	return out, nil
+}
+
+func verifyIncrementalReparse(ctx context.Context, incrementalTree *Tree, state *parseRuntimeState, src []byte, opts ParseOptions) (bool, *Tree, error) {
+	if !shouldVerifyWithFullParse(state) {
+		return false, nil, nil
+	}
+
+	// Verification is best-effort; failures only annotate diagnostics and keep incremental output.
+	fullRaw, _ := state.parser.Parse(ctx, src, nil)
+	if fullRaw == nil {
+		incrementalTree.Diagnostics = append(incrementalTree.Diagnostics, parserWarningDiagnostic("full-parse verification failed; keeping incremental result"))
+		return true, nil, nil
+	}
+
+	fullTree, buildErr := buildSyntaxTreeFromRaw(src, opts, fullRaw)
+	if buildErr != nil {
+		fullRaw.Close()
+		return true, nil, buildErr
+	}
+	if equivalentTrees(incrementalTree, fullTree) {
+		fullRaw.Close()
+		return true, nil, nil
+	}
+
+	if state.rawTree != nil {
+		state.rawTree.Close()
+		state.rawTree = nil
+	}
+	adoptRuntimeTree(fullTree, &parseRuntimeState{
+		parser:             state.parser,
+		rawTree:            fullRaw,
+		incrementalEnabled: false,
+		reparseCount:       state.reparseCount,
+	})
+	fullTree.Diagnostics = append(fullTree.Diagnostics, parserWarningDiagnostic("incremental verification mismatch; switched to full parse"))
+	return true, fullTree, nil
+}
+
+func fallbackIncrementalReparse(
+	ctx context.Context,
+	old *Tree,
+	src []byte,
+	opts ParseOptions,
+	event ReparseEvent,
+	reason string,
+) (*Tree, error) {
+	emitReparseEvent(event)
+	return fullReparseWithExistingParser(ctx, old, src, opts, reason)
+}
+
+func buildSyntaxTreeFromRaw(src []byte, opts ParseOptions, rawTree *ts.Tree) (*Tree, error) {
+	lexRes := lexer.Lex(src)
+	return buildSyntaxTreeFromRawWithLexResult(src, opts, rawTree, lexRes)
+}
+
+func buildSyntaxTreeFromRawWithLexResult(src []byte, opts ParseOptions, rawTree *ts.Tree, lexRes lexer.Result) (*Tree, error) {
+	if rawTree == nil {
+		return nil, errors.New("tree-sitter tree is nil")
+	}
 
 	sourceCopy := slices.Clone(src)
 	out := &Tree{
@@ -46,9 +286,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 	}
 
 	out.Diagnostics = append(out.Diagnostics, mapLexerDiagnostics(lexRes.Diagnostics)...)
-
-	alignmentDiags := validateTokenInvariants(sourceCopy, out.Tokens)
-	out.Diagnostics = append(out.Diagnostics, alignmentDiags...)
+	out.Diagnostics = append(out.Diagnostics, validateTokenInvariants(sourceCopy, out.Tokens)...)
 
 	builder := cstBuilder{
 		tokens:    out.Tokens,
@@ -62,17 +300,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 	out.Root = builder.buildNode(root, NoNode)
 	out.Diagnostics = append(out.Diagnostics, builder.diagnostics...)
 	out.Diagnostics = append(out.Diagnostics, collectParserDiagnostics(root, out.LineIndex)...)
-
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	return out, nil
-}
-
-// Reparse reparses from scratch in v1 while preserving Parse-equivalent behavior.
-func Reparse(ctx context.Context, old *Tree, src []byte, opts ParseOptions) (*Tree, error) {
-	_ = old
-	return Parse(ctx, src, opts)
 }
 
 type cstBuilder struct {

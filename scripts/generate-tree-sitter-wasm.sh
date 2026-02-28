@@ -53,6 +53,8 @@ fi
   -Wl,--export=tw_parser_set_language \
   -Wl,--export=tw_parser_parse_string \
   -Wl,--export=tw_tree_delete \
+  -Wl,--export=tw_tree_edit \
+  -Wl,--export=tw_tree_changed_ranges \
   -Wl,--export=tw_tree_root_node \
   -Wl,--export=tw_node_child_count \
   -Wl,--export=tw_node_child \

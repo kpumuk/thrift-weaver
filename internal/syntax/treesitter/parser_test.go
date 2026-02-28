@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -46,6 +47,65 @@ func TestNewParserFailsOnABIMismatch(t *testing.T) {
 	sum := sha256.Sum256(emptyModule)
 	assertNewParserInitError(t, ErrWASMABIMismatch, func() ([]byte, string) {
 		return append([]byte(nil), emptyModule...), hex.EncodeToString(sum[:])
+	})
+}
+
+func TestParserIncrementalParseReturnsChangedRanges(t *testing.T) {
+	withIsolatedRuntimeState(t, func(t *testing.T) {
+		p, err := NewParser()
+		if err != nil {
+			t.Fatalf("NewParser() error = %v", err)
+		}
+		defer p.Close()
+
+		src := []byte("struct User {\n  1: string name,\n}\n")
+		oldTree, err := p.Parse(context.Background(), src, nil)
+		if err != nil {
+			t.Fatalf("initial parse: %v", err)
+		}
+		defer oldTree.Close()
+
+		idx := strings.Index(string(src), "name")
+		if idx < 0 {
+			t.Fatal("marker not found")
+		}
+		edit := InputEdit{
+			StartByte:  idx,
+			OldEndByte: idx + len("name"),
+			NewEndByte: idx + len("xname"),
+			StartPoint: Point{
+				Row:    1,
+				Column: 12,
+			},
+			OldEndPoint: Point{
+				Row:    1,
+				Column: 16,
+			},
+			NewEndPoint: Point{
+				Row:    1,
+				Column: 17,
+			},
+		}
+		if err := oldTree.ApplyEdit(context.Background(), edit); err != nil {
+			t.Fatalf("ApplyEdit: %v", err)
+		}
+
+		nextSrc := []byte("struct User {\n  1: string xname,\n}\n")
+		nextTree, err := p.Parse(context.Background(), nextSrc, oldTree)
+		if err != nil {
+			t.Fatalf("incremental parse: %v", err)
+		}
+		defer nextTree.Close()
+
+		changed, err := oldTree.ChangedRanges(context.Background(), nextTree)
+		if err != nil {
+			t.Fatalf("ChangedRanges: %v", err)
+		}
+		for i, r := range changed {
+			if r.EndByte < r.StartByte {
+				t.Fatalf("invalid changed range[%d]: %+v", i, r)
+			}
+		}
 	})
 }
 

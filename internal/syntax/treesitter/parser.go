@@ -3,6 +3,7 @@ package treesitter
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,6 +19,11 @@ import (
 )
 
 const wasmNodeSize = 24
+
+const (
+	wasmInputEditSize    = 36
+	wasmChangedRangeSize = 24
+)
 
 var (
 	// ErrWASMChecksumMismatch indicates artifact integrity mismatch.
@@ -49,6 +55,8 @@ var requiredWASMExports = []string{
 	"tw_parser_set_language",
 	"tw_parser_parse_string",
 	"tw_tree_delete",
+	"tw_tree_edit",
+	"tw_tree_changed_ranges",
 	"tw_tree_root_node",
 	"tw_node_child_count",
 	"tw_node_child",
@@ -65,6 +73,30 @@ var requiredWASMExports = []string{
 	"tw_node_has_error",
 }
 
+// Point is a UTF-8 byte-based tree-sitter point.
+type Point struct {
+	Row    int
+	Column int
+}
+
+// InputEdit describes an in-place source edit for ts_tree_edit.
+type InputEdit struct {
+	StartByte   int
+	OldEndByte  int
+	NewEndByte  int
+	StartPoint  Point
+	OldEndPoint Point
+	NewEndPoint Point
+}
+
+// ChangedRange describes a changed byte/point span between two tree versions.
+type ChangedRange struct {
+	StartByte  int
+	EndByte    int
+	StartPoint Point
+	EndPoint   Point
+}
+
 // Parser wraps an in-process tree-sitter parser backed by a wasm runtime.
 type Parser struct {
 	module api.Module
@@ -77,8 +109,10 @@ type Parser struct {
 	parserSetLanguage api.Function
 	parserParseString api.Function
 
-	treeDelete   api.Function
-	treeRootNode api.Function
+	treeDelete        api.Function
+	treeEdit          api.Function
+	treeChangedRanges api.Function
+	treeRootNode      api.Function
 
 	nodeChildCount      api.Function
 	nodeChild           api.Function
@@ -128,8 +162,10 @@ func NewParser() (*Parser, error) {
 		parserSetLanguage: mustExportedFunction(mod, "tw_parser_set_language"),
 		parserParseString: mustExportedFunction(mod, "tw_parser_parse_string"),
 
-		treeDelete:   mustExportedFunction(mod, "tw_tree_delete"),
-		treeRootNode: mustExportedFunction(mod, "tw_tree_root_node"),
+		treeDelete:        mustExportedFunction(mod, "tw_tree_delete"),
+		treeEdit:          mustExportedFunction(mod, "tw_tree_edit"),
+		treeChangedRanges: mustExportedFunction(mod, "tw_tree_changed_ranges"),
+		treeRootNode:      mustExportedFunction(mod, "tw_tree_root_node"),
 
 		nodeChildCount:      mustExportedFunction(mod, "tw_node_child_count"),
 		nodeChild:           mustExportedFunction(mod, "tw_node_child"),
@@ -196,7 +232,9 @@ func (p *Parser) Close() {
 
 // Tree wraps a parsed tree.
 type Tree struct {
-	root *RawNode
+	root    *RawNode
+	owner   *Parser
+	treePtr uint64
 }
 
 // Close releases tree resources.
@@ -204,7 +242,12 @@ func (t *Tree) Close() {
 	if t == nil {
 		return
 	}
+	if t.owner != nil && t.owner.treeDelete != nil && t.treePtr != 0 {
+		_, _ = t.owner.treeDelete.Call(context.Background(), t.treePtr)
+	}
 	t.root = nil
+	t.owner = nil
+	t.treePtr = 0
 }
 
 // Inner returns the wrapped tree pointer.
@@ -220,9 +263,103 @@ func (t *Tree) Root() Node {
 	return wrapNode(t.root)
 }
 
+// ApplyEdit applies an incremental input edit to this tree.
+func (t *Tree) ApplyEdit(ctx context.Context, edit InputEdit) error {
+	if t == nil || t.owner == nil || t.treePtr == 0 {
+		return errors.New("nil tree")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	editPtr, freeEdit, err := t.owner.allocInputEdit(ctx, edit)
+	if err != nil {
+		return err
+	}
+	defer freeEdit()
+	if _, err := t.owner.treeEdit.Call(ctx, t.treePtr, editPtr); err != nil {
+		return fmt.Errorf("apply tree edit: %w", err)
+	}
+	return nil
+}
+
+// ChangedRanges returns changed ranges between the receiver and next tree.
+func (t *Tree) ChangedRanges(ctx context.Context, next *Tree) ([]ChangedRange, error) {
+	if t == nil || next == nil {
+		return nil, nil
+	}
+	if t.owner == nil || next.owner == nil || t.treePtr == 0 || next.treePtr == 0 {
+		return nil, errors.New("nil tree")
+	}
+	if t.owner != next.owner {
+		return nil, errors.New("changed-ranges requires trees from the same parser")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	total, err := t.owner.callU32(ctx, t.owner.treeChangedRanges, t.treePtr, next.treePtr, 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("query changed range count: %w", err)
+	}
+	if total == 0 {
+		return nil, nil
+	}
+
+	totalU64 := uint64(total)
+	size := totalU64 * wasmChangedRangeSize
+	ptr, err := t.owner.callU64(ctx, t.owner.malloc, size)
+	if err != nil {
+		return nil, fmt.Errorf("alloc changed ranges buffer: %w", err)
+	}
+	defer t.owner.freePtr(ptr)
+
+	written, err := t.owner.callU32(ctx, t.owner.treeChangedRanges, t.treePtr, next.treePtr, ptr, uint64(total))
+	if err != nil {
+		return nil, fmt.Errorf("read changed ranges: %w", err)
+	}
+	if written > total {
+		return nil, fmt.Errorf("changed ranges overflow: wrote=%d total=%d", written, total)
+	}
+
+	ptr32, err := uint32FromU64(ptr)
+	if err != nil {
+		return nil, err
+	}
+	byteCount := uint64(written) * wasmChangedRangeSize
+	byteCount32, err := uint32FromU64(byteCount)
+	if err != nil {
+		return nil, err
+	}
+	mem := t.owner.module.Memory()
+	if mem == nil {
+		return nil, errors.New("missing wasm memory")
+	}
+	buf, ok := mem.Read(ptr32, byteCount32)
+	if !ok {
+		return nil, fmt.Errorf("read changed ranges buffer: ptr=%d size=%d", ptr, byteCount)
+	}
+
+	ranges := make([]ChangedRange, 0, written)
+	for i := range written {
+		base := int(i * wasmChangedRangeSize)
+		ranges = append(ranges, ChangedRange{
+			StartByte: int(binary.LittleEndian.Uint32(buf[base : base+4])),
+			EndByte:   int(binary.LittleEndian.Uint32(buf[base+4 : base+8])),
+			StartPoint: Point{
+				Row:    int(binary.LittleEndian.Uint32(buf[base+8 : base+12])),
+				Column: int(binary.LittleEndian.Uint32(buf[base+12 : base+16])),
+			},
+			EndPoint: Point{
+				Row:    int(binary.LittleEndian.Uint32(buf[base+16 : base+20])),
+				Column: int(binary.LittleEndian.Uint32(buf[base+20 : base+24])),
+			},
+		})
+	}
+	return ranges, nil
+}
+
 // Parse parses src and returns a raw tree wrapper. old may be nil.
 func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error) {
-	_ = old // Parse currently runs in full-parse mode and ignores the previous tree.
 	if p == nil || p.module == nil || p.parserPtr == 0 {
 		return nil, errors.New("nil parser")
 	}
@@ -239,7 +376,15 @@ func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error
 	}
 	defer freeSrc()
 
-	treeRes, err := p.parserParseString.Call(ctx, p.parserPtr, 0, srcPtr, uint64(len(src)))
+	oldPtr := uint64(0)
+	if old != nil {
+		if old.owner != p {
+			return nil, errors.New("old tree belongs to a different parser instance")
+		}
+		oldPtr = old.treePtr
+	}
+
+	treeRes, err := p.parserParseString.Call(ctx, p.parserPtr, oldPtr, srcPtr, uint64(len(src)))
 	if err != nil {
 		return nil, fmt.Errorf("parse string: %w", err)
 	}
@@ -247,16 +392,18 @@ func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error
 		return nil, errors.New("tree-sitter parse returned nil tree")
 	}
 	treePtr := treeRes[0]
-	defer func() {
-		_, _ = p.treeDelete.Call(context.Background(), treePtr)
-	}()
 
 	root, err := p.buildTreeFromWASM(ctx, treePtr)
 	if err != nil {
+		_, _ = p.treeDelete.Call(context.Background(), treePtr)
 		return nil, err
 	}
 
-	return &Tree{root: root}, nil
+	return &Tree{
+		root:    root,
+		owner:   p,
+		treePtr: treePtr,
+	}, nil
 }
 
 func (p *Parser) buildTreeFromWASM(ctx context.Context, treePtr uint64) (*RawNode, error) {
@@ -366,6 +513,79 @@ func (p *Parser) allocNode(ctx context.Context) (uint64, func(), error) {
 	ptr, err := p.callU64(ctx, p.malloc, wasmNodeSize)
 	if err != nil {
 		return 0, nil, fmt.Errorf("alloc node: %w", err)
+	}
+	return ptr, func() {
+		p.freePtr(ptr)
+	}, nil
+}
+
+func (p *Parser) allocInputEdit(ctx context.Context, edit InputEdit) (uint64, func(), error) {
+	startByte, err := uint32FromInt(edit.StartByte)
+	if err != nil {
+		return 0, nil, err
+	}
+	oldEndByte, err := uint32FromInt(edit.OldEndByte)
+	if err != nil {
+		return 0, nil, err
+	}
+	newEndByte, err := uint32FromInt(edit.NewEndByte)
+	if err != nil {
+		return 0, nil, err
+	}
+	startRow, err := uint32FromInt(edit.StartPoint.Row)
+	if err != nil {
+		return 0, nil, err
+	}
+	startCol, err := uint32FromInt(edit.StartPoint.Column)
+	if err != nil {
+		return 0, nil, err
+	}
+	oldEndRow, err := uint32FromInt(edit.OldEndPoint.Row)
+	if err != nil {
+		return 0, nil, err
+	}
+	oldEndCol, err := uint32FromInt(edit.OldEndPoint.Column)
+	if err != nil {
+		return 0, nil, err
+	}
+	newEndRow, err := uint32FromInt(edit.NewEndPoint.Row)
+	if err != nil {
+		return 0, nil, err
+	}
+	newEndCol, err := uint32FromInt(edit.NewEndPoint.Column)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	ptr, err := p.callU64(ctx, p.malloc, wasmInputEditSize)
+	if err != nil {
+		return 0, nil, fmt.Errorf("alloc input edit: %w", err)
+	}
+	ptr32, err := uint32FromU64(ptr)
+	if err != nil {
+		p.freePtr(ptr)
+		return 0, nil, err
+	}
+
+	buf := make([]byte, wasmInputEditSize)
+	binary.LittleEndian.PutUint32(buf[0:4], startByte)
+	binary.LittleEndian.PutUint32(buf[4:8], oldEndByte)
+	binary.LittleEndian.PutUint32(buf[8:12], newEndByte)
+	binary.LittleEndian.PutUint32(buf[12:16], startRow)
+	binary.LittleEndian.PutUint32(buf[16:20], startCol)
+	binary.LittleEndian.PutUint32(buf[20:24], oldEndRow)
+	binary.LittleEndian.PutUint32(buf[24:28], oldEndCol)
+	binary.LittleEndian.PutUint32(buf[28:32], newEndRow)
+	binary.LittleEndian.PutUint32(buf[32:36], newEndCol)
+
+	mem := p.module.Memory()
+	if mem == nil {
+		p.freePtr(ptr)
+		return 0, nil, errors.New("missing wasm memory")
+	}
+	if !mem.Write(ptr32, buf) {
+		p.freePtr(ptr)
+		return 0, nil, errors.New("write input edit into wasm memory")
 	}
 	return ptr, func() {
 		p.freePtr(ptr)
@@ -516,4 +736,11 @@ func uint16FromU32(v uint32) (uint16, bool) {
 		return 0, false
 	}
 	return uint16(v), true
+}
+
+func uint32FromInt(v int) (uint32, error) {
+	if v < 0 || uint64(v) > math.MaxUint32 {
+		return 0, fmt.Errorf("value overflows uint32: %d", v)
+	}
+	return uint32(v), nil
 }
