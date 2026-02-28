@@ -281,7 +281,6 @@ func buildSyntaxTreeFromRawWithLexResult(src []byte, opts ParseOptions, rawTree 
 		Version:   opts.Version,
 		Source:    sourceCopy,
 		Tokens:    append([]lexer.Token(nil), lexRes.Tokens...),
-		Nodes:     []Node{{}}, // sentinel at index 0
 		LineIndex: text.NewLineIndex(sourceCopy),
 	}
 
@@ -297,10 +296,25 @@ func buildSyntaxTreeFromRawWithLexResult(src []byte, opts ParseOptions, rawTree 
 	if root == nil {
 		return nil, errors.New("tree-sitter root node is nil")
 	}
+	out.Nodes = make([]Node, 1, 1+countRawNodes(root))
 	out.Root = builder.buildNode(root, NoNode)
 	out.Diagnostics = append(out.Diagnostics, builder.diagnostics...)
 	out.Diagnostics = append(out.Diagnostics, collectParserDiagnostics(root, out.LineIndex)...)
 	return out, nil
+}
+
+func countRawNodes(root *ts.RawNode) int {
+	if root == nil {
+		return 0
+	}
+	total := 1
+	for _, child := range root.Children {
+		if child == nil || child.IsExtra {
+			continue
+		}
+		total += countRawNodes(child)
+	}
+	return total
 }
 
 type cstBuilder struct {

@@ -271,11 +271,11 @@ func (t *Tree) ApplyEdit(ctx context.Context, edit InputEdit) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	editPtr, freeEdit, err := t.owner.allocInputEdit(ctx, edit)
+	editPtr, err := t.owner.allocInputEdit(ctx, edit)
 	if err != nil {
 		return err
 	}
-	defer freeEdit()
+	defer t.owner.freePtr(editPtr)
 	if _, err := t.owner.treeEdit.Call(ctx, t.treePtr, editPtr); err != nil {
 		return fmt.Errorf("apply tree edit: %w", err)
 	}
@@ -370,11 +370,11 @@ func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error
 		return nil, err
 	}
 
-	srcPtr, freeSrc, err := p.allocBytes(ctx, src)
+	srcPtr, err := p.allocBytes(ctx, src)
 	if err != nil {
 		return nil, err
 	}
-	defer freeSrc()
+	defer p.freePtr(srcPtr)
 
 	oldPtr := uint64(0)
 	if old != nil {
@@ -407,11 +407,11 @@ func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error
 }
 
 func (p *Parser) buildTreeFromWASM(ctx context.Context, treePtr uint64) (*RawNode, error) {
-	nodePtr, freeNode, err := p.allocNode(ctx)
+	nodePtr, err := p.allocNode(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer freeNode()
+	defer p.freePtr(nodePtr)
 
 	if _, err := p.treeRootNode.Call(ctx, treePtr, nodePtr); err != nil {
 		return nil, fmt.Errorf("get root node: %w", err)
@@ -420,11 +420,6 @@ func (p *Parser) buildTreeFromWASM(ctx context.Context, treePtr uint64) (*RawNod
 }
 
 func (p *Parser) buildRawNode(ctx context.Context, nodePtr uint64) (*RawNode, error) {
-	kind, err := p.nodeKind(ctx, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-
 	symbolID, err := p.callU32(ctx, p.nodeSymbol, nodePtr)
 	if err != nil {
 		return nil, err
@@ -433,7 +428,11 @@ func (p *Parser) buildRawNode(ctx context.Context, nodePtr uint64) (*RawNode, er
 	if !ok {
 		return nil, fmt.Errorf("node symbol out of range: %d", symbolID)
 	}
-	rememberNodeKind(symbol, kind)
+
+	kind, err := p.nodeKind(ctx, nodePtr, symbol)
+	if err != nil {
+		return nil, err
+	}
 	startByte, err := p.callU32(ctx, p.nodeStartByte, nodePtr)
 	if err != nil {
 		return nil, err
@@ -470,17 +469,17 @@ func (p *Parser) buildRawNode(ctx context.Context, nodePtr uint64) (*RawNode, er
 	}
 	children := make([]*RawNode, 0, childCount)
 	for i := range childCount {
-		childPtr, freeChild, err := p.allocNode(ctx)
+		childPtr, err := p.allocNode(ctx)
 		if err != nil {
 			return nil, err
 		}
 		if _, err := p.nodeChild.Call(ctx, nodePtr, uint64(i), childPtr); err != nil {
-			freeChild()
+			p.freePtr(childPtr)
 			return nil, fmt.Errorf("get child[%d]: %w", i, err)
 		}
 
 		child, err := p.buildRawNode(ctx, childPtr)
-		freeChild()
+		p.freePtr(childPtr)
 		if err != nil {
 			return nil, err
 		}
@@ -501,73 +500,80 @@ func (p *Parser) buildRawNode(ctx context.Context, nodePtr uint64) (*RawNode, er
 	}, nil
 }
 
-func (p *Parser) nodeKind(ctx context.Context, nodePtr uint64) (string, error) {
+func (p *Parser) nodeKind(ctx context.Context, nodePtr uint64, symbol uint16) (string, error) {
+	if kind, ok := lookupNodeKind(symbol); ok {
+		return kind, nil
+	}
+
 	ptr, err := p.callU64(ctx, p.nodeType, nodePtr)
 	if err != nil {
 		return "", err
 	}
-	return p.readCString(ctx, ptr)
+	kind, err := p.readCString(ctx, ptr)
+	if err != nil {
+		return "", err
+	}
+	rememberNodeKind(symbol, kind)
+	return kind, nil
 }
 
-func (p *Parser) allocNode(ctx context.Context) (uint64, func(), error) {
+func (p *Parser) allocNode(ctx context.Context) (uint64, error) {
 	ptr, err := p.callU64(ctx, p.malloc, wasmNodeSize)
 	if err != nil {
-		return 0, nil, fmt.Errorf("alloc node: %w", err)
+		return 0, fmt.Errorf("alloc node: %w", err)
 	}
-	return ptr, func() {
-		p.freePtr(ptr)
-	}, nil
+	return ptr, nil
 }
 
-func (p *Parser) allocInputEdit(ctx context.Context, edit InputEdit) (uint64, func(), error) {
+func (p *Parser) allocInputEdit(ctx context.Context, edit InputEdit) (uint64, error) {
 	startByte, err := uint32FromInt(edit.StartByte)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	oldEndByte, err := uint32FromInt(edit.OldEndByte)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	newEndByte, err := uint32FromInt(edit.NewEndByte)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	startRow, err := uint32FromInt(edit.StartPoint.Row)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	startCol, err := uint32FromInt(edit.StartPoint.Column)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	oldEndRow, err := uint32FromInt(edit.OldEndPoint.Row)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	oldEndCol, err := uint32FromInt(edit.OldEndPoint.Column)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	newEndRow, err := uint32FromInt(edit.NewEndPoint.Row)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	newEndCol, err := uint32FromInt(edit.NewEndPoint.Column)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 
 	ptr, err := p.callU64(ctx, p.malloc, wasmInputEditSize)
 	if err != nil {
-		return 0, nil, fmt.Errorf("alloc input edit: %w", err)
+		return 0, fmt.Errorf("alloc input edit: %w", err)
 	}
 	ptr32, err := uint32FromU64(ptr)
 	if err != nil {
 		p.freePtr(ptr)
-		return 0, nil, err
+		return 0, err
 	}
 
-	buf := make([]byte, wasmInputEditSize)
+	var buf [wasmInputEditSize]byte
 	binary.LittleEndian.PutUint32(buf[0:4], startByte)
 	binary.LittleEndian.PutUint32(buf[4:8], oldEndByte)
 	binary.LittleEndian.PutUint32(buf[8:12], newEndByte)
@@ -581,43 +587,39 @@ func (p *Parser) allocInputEdit(ctx context.Context, edit InputEdit) (uint64, fu
 	mem := p.module.Memory()
 	if mem == nil {
 		p.freePtr(ptr)
-		return 0, nil, errors.New("missing wasm memory")
+		return 0, errors.New("missing wasm memory")
 	}
-	if !mem.Write(ptr32, buf) {
+	if !mem.Write(ptr32, buf[:]) {
 		p.freePtr(ptr)
-		return 0, nil, errors.New("write input edit into wasm memory")
+		return 0, errors.New("write input edit into wasm memory")
 	}
-	return ptr, func() {
-		p.freePtr(ptr)
-	}, nil
+	return ptr, nil
 }
 
-func (p *Parser) allocBytes(ctx context.Context, bytes []byte) (uint64, func(), error) {
+func (p *Parser) allocBytes(ctx context.Context, bytes []byte) (uint64, error) {
 	size := uint64(len(bytes))
 	if size == 0 {
 		size = 1
 	}
 	ptr, err := p.callU64(ctx, p.malloc, size)
 	if err != nil {
-		return 0, nil, fmt.Errorf("alloc source bytes: %w", err)
+		return 0, fmt.Errorf("alloc source bytes: %w", err)
 	}
 	ptr32, err := uint32FromU64(ptr)
 	if err != nil {
 		p.freePtr(ptr)
-		return 0, nil, err
+		return 0, err
 	}
 	mem := p.module.Memory()
 	if mem == nil {
 		p.freePtr(ptr)
-		return 0, nil, errors.New("missing wasm memory")
+		return 0, errors.New("missing wasm memory")
 	}
 	if len(bytes) > 0 && !mem.Write(ptr32, bytes) {
 		p.freePtr(ptr)
-		return 0, nil, errors.New("write source bytes into wasm memory")
+		return 0, errors.New("write source bytes into wasm memory")
 	}
-	return ptr, func() {
-		p.freePtr(ptr)
-	}, nil
+	return ptr, nil
 }
 
 func (p *Parser) readCString(ctx context.Context, ptr uint64) (string, error) {

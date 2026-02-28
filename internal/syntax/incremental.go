@@ -13,7 +13,8 @@ import (
 )
 
 var (
-	fullParseVerificationEvery uint64 = 32
+	// Verification is periodic and intentionally sparse to keep edit-path allocations low.
+	fullParseVerificationEvery uint64 = 256
 
 	verificationCompareOverrideMu sync.RWMutex
 	verificationCompareOverride   func(a, b *Tree) bool

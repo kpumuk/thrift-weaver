@@ -26,6 +26,13 @@ func (l *NodeKindRegistry) NodeKindForID(id uint16) string {
 	return name
 }
 
+func lookupNodeKind(id uint16) (string, bool) {
+	kindRegistryMu.RLock()
+	name, ok := idToKind[id]
+	kindRegistryMu.RUnlock()
+	return name, ok
+}
+
 func rememberNodeKind(id uint16, name string) {
 	kindRegistryMu.Lock()
 	defer kindRegistryMu.Unlock()
