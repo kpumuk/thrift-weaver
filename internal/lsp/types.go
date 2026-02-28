@@ -56,8 +56,9 @@ type ServerCapabilities struct {
 
 // TextDocumentSyncOptions declares document sync behavior.
 type TextDocumentSyncOptions struct {
-	OpenClose bool `json:"openClose,omitempty"`
-	Change    int  `json:"change,omitempty"`
+	OpenClose bool         `json:"openClose,omitempty"`
+	Change    int          `json:"change,omitempty"`
+	Save      *SaveOptions `json:"save,omitempty"`
 }
 
 const (
@@ -117,6 +118,17 @@ type DidChangeParams struct {
 // DidCloseParams is the didClose notification payload.
 type DidCloseParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// DidSaveParams is the didSave notification payload.
+type DidSaveParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Text         *string                `json:"text,omitempty"`
+}
+
+// SaveOptions controls textDocument/didSave payload behavior.
+type SaveOptions struct {
+	IncludeText bool `json:"includeText,omitempty"`
 }
 
 // PublishDiagnosticsParams is the LSP publishDiagnostics notification payload.

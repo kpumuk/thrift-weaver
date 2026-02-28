@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
 	fmtengine "github.com/kpumuk/thrift-weaver/internal/format"
+	"github.com/kpumuk/thrift-weaver/internal/lint"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
@@ -18,6 +20,7 @@ import (
 // Server is a thrift LSP server with an in-memory snapshot store.
 type Server struct {
 	store *SnapshotStore
+	lint  *lint.Runner
 
 	mu            sync.Mutex
 	shutdown      bool
@@ -32,6 +35,7 @@ type Server struct {
 func NewServer() *Server {
 	return &Server{
 		store:            NewSnapshotStore(),
+		lint:             lint.NewDefaultRunner(),
 		requestCancels:   make(map[string]context.CancelFunc),
 		pendingCancelled: make(map[string]struct{}),
 	}
@@ -160,7 +164,7 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		if err := s.DidOpen(ctx, p); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
-		if err := s.publishDiagnosticsForURI(w, p.TextDocument.URI); err != nil {
+		if err := s.publishDiagnosticsForURI(ctx, w, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		return nil
@@ -181,7 +185,19 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 			}
 			return writeErr(code, err.Error())
 		}
-		if err := s.publishDiagnosticsForURI(w, p.TextDocument.URI); err != nil {
+		if err := s.publishDiagnosticsForURI(ctx, w, p.TextDocument.URI); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
+		return nil
+	case "textDocument/didSave":
+		var p DidSaveParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		if err := s.DidSave(ctx, p); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
+		if err := s.publishDiagnosticsForURI(ctx, w, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		return nil
@@ -311,6 +327,13 @@ func (s *Server) DidChange(ctx context.Context, p DidChangeParams) error {
 	return err
 }
 
+// DidSave handles didSave notifications. v1 performs no extra state mutation.
+func (s *Server) DidSave(ctx context.Context, p DidSaveParams) error {
+	_ = ctx
+	_ = p
+	return nil
+}
+
 // DidClose removes the document snapshot if present.
 func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
 	_ = ctx
@@ -400,7 +423,7 @@ func (s *Server) formattingSnapshot(uri string, version *int32) (*Snapshot, erro
 	return snap, nil
 }
 
-func (s *Server) publishDiagnosticsForURI(w *bufio.Writer, uri string) error {
+func (s *Server) publishDiagnosticsForURI(ctx context.Context, w *bufio.Writer, uri string) error {
 	store, err := s.requireStore()
 	if err != nil {
 		return err
@@ -409,16 +432,39 @@ func (s *Server) publishDiagnosticsForURI(w *bufio.Writer, uri string) error {
 	if !ok {
 		return nil
 	}
-	diags, err := lspDiagnosticsFromSyntax(snap.Tree)
+	diags, err := s.collectLSPDiagnostics(ctx, snap.Tree)
 	if err != nil {
 		return err
 	}
 	version := snap.Version
+	latest, ok := store.Snapshot(uri)
+	if !ok || latest.Version != version {
+		return nil
+	}
 	return s.writeNotification(w, "textDocument/publishDiagnostics", PublishDiagnosticsParams{
 		URI:         uri,
 		Version:     &version,
 		Diagnostics: diags,
 	})
+}
+
+func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) ([]Diagnostic, error) {
+	if tree == nil {
+		return nil, errors.New("nil syntax tree")
+	}
+	combined := slices.Clone(tree.Diagnostics)
+	if s == nil || s.lint == nil {
+		return lspDiagnosticsFromSyntax(tree, combined)
+	}
+
+	lintDiags, err := s.lint.Run(ctx, tree)
+	if err != nil {
+		return lspDiagnosticsFromSyntax(tree, combined)
+	}
+	combined = append(combined, lintDiags...)
+
+	lint.SortDiagnostics(combined)
+	return lspDiagnosticsFromSyntax(tree, combined)
 }
 
 func (s *Server) publishClearedDiagnostics(w *bufio.Writer, uri string) error {
@@ -564,7 +610,7 @@ func lspTextEditsFromByteEdits(li *itext.LineIndex, edits []itext.ByteEdit) ([]T
 	return out, nil
 }
 
-func lspDiagnosticsFromSyntax(tree *syntax.Tree) ([]Diagnostic, error) {
+func lspDiagnosticsFromSyntax(tree *syntax.Tree, diagnostics []syntax.Diagnostic) ([]Diagnostic, error) {
 	if tree == nil {
 		return nil, errors.New("nil syntax tree")
 	}
@@ -572,8 +618,8 @@ func lspDiagnosticsFromSyntax(tree *syntax.Tree) ([]Diagnostic, error) {
 	if li == nil {
 		li = itext.NewLineIndex(tree.Source)
 	}
-	out := make([]Diagnostic, 0, len(tree.Diagnostics))
-	for _, d := range tree.Diagnostics {
+	out := make([]Diagnostic, 0, len(diagnostics))
+	for _, d := range diagnostics {
 		rng, err := lspRangeFromSpan(li, d.Span)
 		if err != nil {
 			return nil, err
