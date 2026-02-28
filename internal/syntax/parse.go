@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
 	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
@@ -323,9 +324,10 @@ func buildSyntaxTreeFromRawWithLexResult(ctx context.Context, src []byte, opts P
 	}
 
 	builder := cstBuilder{
-		tokens:    out.Tokens,
-		nodes:     &out.Nodes,
-		lineIndex: out.LineIndex,
+		tokens:     out.Tokens,
+		tokenIndex: newTokenSpanIndex(out.Tokens),
+		nodes:      &out.Nodes,
+		lineIndex:  out.LineIndex,
 	}
 	out.Nodes = make([]Node, 1, 1+len(flatNodes))
 	out.Root = builder.buildFlatTree(flatNodes)
@@ -336,6 +338,7 @@ func buildSyntaxTreeFromRawWithLexResult(ctx context.Context, src []byte, opts P
 
 type cstBuilder struct {
 	tokens      []lexer.Token
+	tokenIndex  tokenSpanIndex
 	nodes       *[]Node
 	lineIndex   *text.LineIndex
 	diagnostics []Diagnostic
@@ -358,7 +361,7 @@ func (b *cstBuilder) buildFlatTree(flatNodes []ts.FlatNode) NodeID {
 
 		id := nodeIDFromLen(len(*b.nodes))
 		sp := spanFromFlatNode(flat, b.lineIndex)
-		firstTok, lastTok, rangeErr := tokenRangeForSpan(b.tokens, sp)
+		firstTok, lastTok, rangeErr := b.tokenIndex.rangeForSpan(sp)
 		if rangeErr != nil {
 			b.diagnostics = append(b.diagnostics, internalAlignmentDiag(sp, rangeErr.Error()))
 		}
@@ -524,53 +527,84 @@ func validateTokenInvariants(src []byte, tokens []lexer.Token) []Diagnostic {
 	return diags
 }
 
-func tokenRangeForSpan(tokens []lexer.Token, sp text.Span) (uint32, uint32, error) {
+type tokenSpanIndex struct {
+	tokens       []lexer.Token
+	nonEOFCount  int
+	eofIdx       int
+	eofOffset    text.ByteOffset
+	hasEOF       bool
+	lastTokenIdx int
+}
+
+func newTokenSpanIndex(tokens []lexer.Token) tokenSpanIndex {
+	idx := tokenSpanIndex{
+		tokens:       tokens,
+		nonEOFCount:  len(tokens),
+		eofIdx:       len(tokens) - 1,
+		lastTokenIdx: len(tokens) - 1,
+	}
 	if len(tokens) == 0 {
+		return idx
+	}
+
+	if tokens[idx.eofIdx].Kind == lexer.TokenEOF {
+		idx.nonEOFCount--
+		idx.hasEOF = true
+		idx.eofOffset = tokens[idx.eofIdx].Span.Start
+	}
+	return idx
+}
+
+func (i tokenSpanIndex) rangeForSpan(sp text.Span) (uint32, uint32, error) {
+	if len(i.tokens) == 0 {
 		return 0, 0, errors.New("no tokens available for span mapping")
 	}
 	if !sp.IsValid() {
-		idx := uint32FromInt(len(tokens) - 1)
+		idx := uint32FromInt(i.eofIdx)
 		return idx, idx, fmt.Errorf("invalid node span %s", sp)
 	}
-
 	if sp.IsEmpty() {
-		idx := nearestTokenIndex(tokens, sp.Start)
+		idx := i.nearestTokenIndex(sp.Start)
 		return idx, idx, nil
 	}
 
-	first := -1
-	last := -1
-	for i, tok := range tokens {
-		if tok.Kind == lexer.TokenEOF {
-			break
-		}
-		if tok.Span.End <= sp.Start {
-			continue
-		}
-		if tok.Span.Start >= sp.End {
-			break
-		}
-		if tok.Span.Intersects(sp) || tok.Span.Contains(sp.Start) || sp.Contains(tok.Span.Start) {
-			if first == -1 {
-				first = i
-			}
-			last = i
-		}
-	}
-	if first == -1 {
-		idx := nearestTokenIndex(tokens, sp.Start)
+	first := sort.Search(i.nonEOFCount, func(pos int) bool { return i.tokens[pos].Span.End > sp.Start })
+	if first == i.nonEOFCount || i.tokens[first].Span.Start >= sp.End {
+		idx := i.nearestTokenIndex(sp.Start)
 		return idx, idx, fmt.Errorf("node span %s does not cover any lexer token", sp)
 	}
+	lastExclusive := sort.Search(i.nonEOFCount, func(pos int) bool { return i.tokens[pos].Span.Start >= sp.End })
+	last := lastExclusive - 1
+	if last < first {
+		idx := i.nearestTokenIndex(sp.Start)
+		return idx, idx, fmt.Errorf("node span %s does not cover any lexer token", sp)
+	}
+
 	return uint32FromInt(first), uint32FromInt(last), nil
 }
 
-func nearestTokenIndex(tokens []lexer.Token, off text.ByteOffset) uint32 {
-	for i, tok := range tokens {
-		if tok.Span.Contains(off) || tok.Span.Start >= off {
-			return uint32FromInt(i)
+func (i tokenSpanIndex) nearestTokenIndex(off text.ByteOffset) uint32 {
+	if len(i.tokens) == 0 {
+		return 0
+	}
+
+	firstAfterOffset := sort.Search(i.nonEOFCount, func(pos int) bool { return i.tokens[pos].Span.Start >= off })
+	if firstAfterOffset < i.nonEOFCount {
+		candidate := firstAfterOffset
+		if i.tokens[candidate].Span.Start == off || i.tokens[candidate].Span.End > off {
+			return uint32FromInt(candidate)
 		}
 	}
-	return uint32FromInt(len(tokens) - 1)
+
+	containing := sort.Search(i.nonEOFCount, func(pos int) bool { return i.tokens[pos].Span.End > off })
+	if containing < i.nonEOFCount && i.tokens[containing].Span.Start <= off {
+		return uint32FromInt(containing)
+	}
+
+	if i.hasEOF && i.eofIdx >= 0 && off <= i.eofOffset {
+		return uint32FromInt(i.eofIdx)
+	}
+	return uint32FromInt(i.lastTokenIdx)
 }
 
 func internalAlignmentDiag(span text.Span, msg string) Diagnostic {
