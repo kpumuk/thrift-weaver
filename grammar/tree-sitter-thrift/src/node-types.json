@@ -34,27 +34,7 @@
       "required": true,
       "types": [
         {
-          "type": "bool_literal",
-          "named": true
-        },
-        {
-          "type": "float_literal",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "int_literal",
-          "named": true
-        },
-        {
           "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "uuid_literal",
           "named": true
         }
       ]
@@ -66,7 +46,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "annotation",
@@ -398,7 +378,17 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "field_name",
+            "named": true
+          }
+        ]
+      },
+      "reference": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "field_reference",
             "named": true
           }
         ]
@@ -433,7 +423,15 @@
           "named": true
         },
         {
-          "type": "legacy_field_option",
+          "type": "xsd_attrs",
+          "named": true
+        },
+        {
+          "type": "xsd_nillable",
+          "named": true
+        },
+        {
+          "type": "xsd_optional",
           "named": true
         }
       ]
@@ -464,6 +462,30 @@
       "types": [
         {
           "type": "int_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "field_keyword_name",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "field_name",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "field_keyword_name",
+          "named": true
+        },
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -587,24 +609,29 @@
     }
   },
   {
-    "type": "legacy_field_option",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "string_literal",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "list_type",
     "named": true,
     "fields": {
+      "cpp_type_prefix": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "legacy_cpp_type",
+            "named": true
+          }
+        ]
+      },
+      "cpp_type_suffix": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "legacy_cpp_type",
+            "named": true
+          }
+        ]
+      },
       "element": {
         "multiple": false,
         "required": true,
@@ -615,22 +642,22 @@
           }
         ]
       }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "legacy_cpp_type",
-          "named": true
-        }
-      ]
     }
   },
   {
     "type": "map_type",
     "named": true,
     "fields": {
+      "cpp_type_prefix": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "legacy_cpp_type",
+            "named": true
+          }
+        ]
+      },
       "key": {
         "multiple": false,
         "required": true,
@@ -651,20 +678,42 @@
           }
         ]
       }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "legacy_cpp_type",
-          "named": true
-        }
-      ]
     }
   },
   {
-    "type": "namespace_declaration",
+    "type": "misplaced_cpp_include_declaration",
+    "named": true,
+    "fields": {
+      "path": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "misplaced_include_declaration",
+    "named": true,
+    "fields": {
+      "path": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "misplaced_namespace_declaration",
     "named": true,
     "fields": {
       "scope": {
@@ -672,7 +721,11 @@
         "required": true,
         "types": [
           {
-            "type": "namespace_scope",
+            "type": "*",
+            "named": false
+          },
+          {
+            "type": "namespace_named_scope",
             "named": true
           }
         ]
@@ -687,6 +740,56 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "annotations",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "namespace_declaration",
+    "named": true,
+    "fields": {
+      "scope": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "*",
+            "named": false
+          },
+          {
+            "type": "namespace_named_scope",
+            "named": true
+          }
+        ]
+      },
+      "target": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "namespace_target",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "annotations",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -835,6 +938,16 @@
     "type": "set_type",
     "named": true,
     "fields": {
+      "cpp_type_prefix": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "legacy_cpp_type",
+            "named": true
+          }
+        ]
+      },
       "element": {
         "multiple": false,
         "required": true,
@@ -845,16 +958,6 @@
           }
         ]
       }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "legacy_cpp_type",
-          "named": true
-        }
-      ]
     }
   },
   {
@@ -884,6 +987,18 @@
         },
         {
           "type": "include_declaration",
+          "named": true
+        },
+        {
+          "type": "misplaced_cpp_include_declaration",
+          "named": true
+        },
+        {
+          "type": "misplaced_include_declaration",
+          "named": true
+        },
+        {
+          "type": "misplaced_namespace_declaration",
           "named": true
         },
         {
@@ -1069,6 +1184,21 @@
     }
   },
   {
+    "type": "xsd_attrs",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "(",
     "named": false
   },
@@ -1077,15 +1207,11 @@
     "named": false
   },
   {
-    "type": "+",
+    "type": "*",
     "named": false
   },
   {
     "type": ",",
-    "named": false
-  },
-  {
-    "type": "-",
     "named": false
   },
   {
@@ -1174,6 +1300,10 @@
     "named": false
   },
   {
+    "type": "field_reference",
+    "named": true
+  },
+  {
     "type": "float_literal",
     "named": true
   },
@@ -1218,7 +1348,7 @@
     "named": false
   },
   {
-    "type": "namespace_scope",
+    "type": "namespace_named_scope",
     "named": true
   },
   {
@@ -1298,16 +1428,12 @@
     "named": false
   },
   {
-    "type": "xsd_namespace",
-    "named": false
-  },
-  {
     "type": "xsd_nillable",
-    "named": false
+    "named": true
   },
   {
     "type": "xsd_optional",
-    "named": false
+    "named": true
   },
   {
     "type": "{",

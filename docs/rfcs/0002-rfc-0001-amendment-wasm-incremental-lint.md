@@ -78,6 +78,17 @@ Implementations must include explicit correctness verification:
 - Memory/time limits for parse and query execution are required.
 - Input bounds are required for document size and edit volume.
 
+## 8. Failure Policy by Surface
+
+- Editor parse lifecycle (`didOpen`, `didChange`) is fail-open:
+  - document version/text must advance even when parser runtime initialization/reparse fails
+  - implementation must store a degraded current-version tree and publish parser internal diagnostics for that version
+  - prior-version parser diagnostics must not be reused as current-version results
+- Formatter remains fail-closed:
+  - formatting requests must refuse output when parse state is unsafe (missing root or non-recoverable parser diagnostics)
+- Linter policy (future) is fail-closed:
+  - if parse state is unsafe, rules do not run and only parser/internal diagnostics are published
+
 ## Non-Changes
 
 This amendment does not change:
@@ -95,6 +106,7 @@ The amendment is considered implemented when all are true:
 3. Lint MVP is wired as full-file debounced lint-on-change.
 4. CI validates WASM artifact drift and `CGO_ENABLED=0` builds.
 5. No parser backend toggle exists in user-facing configuration.
+6. Editor lifecycle is fail-open while formatter remains fail-closed under parser runtime failures.
 
 ## Compatibility and Migration Notes
 

@@ -25,12 +25,15 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 
 	parser, err := currentParserFactory().NewParser()
 	if err != nil {
-		return nil, fmt.Errorf("init parser: %w", err)
+		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("init parser: %w", err)), nil
 	}
 	rawTree, err := parser.Parse(ctx, src, nil)
 	if err != nil {
 		parser.Close()
-		return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("parse source: %w", err)), nil
 	}
 	out, err := buildSyntaxTreeFromRawWithLexResult(src, opts, rawTree, lexRes)
 	if err != nil {
@@ -268,6 +271,27 @@ func fallbackIncrementalReparse(
 func buildSyntaxTreeFromRaw(src []byte, opts ParseOptions, rawTree *ts.Tree) (*Tree, error) {
 	lexRes := lexer.Lex(src)
 	return buildSyntaxTreeFromRawWithLexResult(src, opts, rawTree, lexRes)
+}
+
+func buildDegradedTreeForParserFailure(src []byte, opts ParseOptions, parseErr error) *Tree {
+	return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexer.Lex(src), parseErr)
+}
+
+func buildDegradedTreeForParserFailureWithLexResult(src []byte, opts ParseOptions, lexRes lexer.Result, parseErr error) *Tree {
+	sourceCopy := slices.Clone(src)
+	out := &Tree{
+		URI:       opts.URI,
+		Version:   opts.Version,
+		Source:    sourceCopy,
+		Tokens:    append([]lexer.Token(nil), lexRes.Tokens...),
+		Nodes:     make([]Node, 1),
+		Root:      NoNode,
+		LineIndex: text.NewLineIndex(sourceCopy),
+	}
+	out.Diagnostics = append(out.Diagnostics, mapLexerDiagnostics(lexRes.Diagnostics)...)
+	out.Diagnostics = append(out.Diagnostics, validateTokenInvariants(sourceCopy, out.Tokens)...)
+	out.Diagnostics = append(out.Diagnostics, parserFailureDiagnostic(sourceCopy, parseErr))
+	return out
 }
 
 func buildSyntaxTreeFromRawWithLexResult(src []byte, opts ParseOptions, rawTree *ts.Tree, lexRes lexer.Result) (*Tree, error) {
@@ -551,6 +575,21 @@ func internalAlignmentDiag(span text.Span, msg string) Diagnostic {
 		Message:     msg,
 		Severity:    SeverityError,
 		Span:        span,
+		Source:      "parser",
+		Recoverable: false,
+	}
+}
+
+func parserFailureDiagnostic(src []byte, parseErr error) Diagnostic {
+	msg := "parser backend unavailable"
+	if parseErr != nil {
+		msg = parseErr.Error()
+	}
+	return Diagnostic{
+		Code:        DiagnosticInternalParse,
+		Message:     msg,
+		Severity:    SeverityError,
+		Span:        text.Span{Start: 0, End: text.ByteOffset(len(src))},
 		Source:      "parser",
 		Recoverable: false,
 	}

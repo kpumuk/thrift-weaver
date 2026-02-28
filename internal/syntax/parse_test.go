@@ -175,6 +175,73 @@ func TestParseIgnoresExtraCommentNodesForAlignment(t *testing.T) {
 	}
 }
 
+func TestParseApacheParityConstructs(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`
+namespace xsd test (uri = 'http://thrift.apache.org/ns/Test')
+const i32 NEG = -1
+const double PI = -3.14e+1
+const list<i32> LIST_SEMI = [1; 2;]
+const map<string, i32> MAP_SEMI = {"a": 1; "b": 2;}
+
+typedef map cpp_type "std::map<std::string,std::string>" <string, string> Dict
+typedef set cpp_type "std::set<std::string>" <string> Keys
+typedef list cpp_type "std::vector<std::string>" <string> cpp_type "std::list<std::string>" LegacyList
+
+struct S xsd_all {
+  1: optional i32 reference namespace = -2 xsd_optional xsd_nillable xsd_attrs { 1: string include } (doc = "ok")
+}
+`)
+
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if hasDiagnosticCode(tree.Diagnostics, DiagnosticParserErrorNode) || hasDiagnosticCode(tree.Diagnostics, DiagnosticParserMissingNode) {
+		t.Fatalf("unexpected parser diagnostics: %+v", tree.Diagnostics)
+	}
+	for _, kind := range []string{
+		"namespace_declaration",
+		"struct_definition",
+		"map_type",
+		"set_type",
+		"list_type",
+		"xsd_attrs",
+		"field_reference",
+	} {
+		if !treeHasKind(tree, kind) {
+			t.Fatalf("expected CST kind %q", kind)
+		}
+	}
+}
+
+func TestParseRejectsEqualsInConstMapEntry(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`const map<string, i32> BAD = {"x" = 1}`)
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !hasDiagnosticCode(tree.Diagnostics, DiagnosticParserErrorNode) {
+		t.Fatalf("expected parser error diagnostic for '=' map entry, got %+v", tree.Diagnostics)
+	}
+}
+
+func TestParseMisplacedHeaderFailOpen(t *testing.T) {
+	t.Parallel()
+
+	src := []byte("struct A {}\nnamespace go demo\n")
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !treeHasKind(tree, "misplaced_namespace_declaration") {
+		t.Fatalf("expected misplaced namespace node, got diagnostics=%+v", tree.Diagnostics)
+	}
+}
+
 func TestReparseEquivalentToParse(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +387,18 @@ func hasDiagnosticCode(diags []Diagnostic, code DiagnosticCode) bool {
 func hasDiagnosticSource(diags []Diagnostic, source string) bool {
 	for _, d := range diags {
 		if d.Source == source {
+			return true
+		}
+	}
+	return false
+}
+
+func treeHasKind(tree *Tree, want string) bool {
+	if tree == nil {
+		return false
+	}
+	for _, n := range tree.Nodes {
+		if KindName(n.Kind) == want {
 			return true
 		}
 	}

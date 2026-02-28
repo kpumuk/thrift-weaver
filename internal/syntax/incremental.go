@@ -269,7 +269,13 @@ func fullReparseWithExistingParser(ctx context.Context, old *Tree, src []byte, o
 	}
 	newRawTree, err := state.parser.Parse(ctx, src, nil)
 	if err != nil {
-		return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if old != nil {
+			old.closeRuntime()
+		}
+		return buildDegradedTreeForParserFailure(src, opts, fullReparseFailureError(reason, err)), nil
 	}
 	out, err := buildSyntaxTreeFromRaw(src, opts, newRawTree)
 	if err != nil {
@@ -305,4 +311,11 @@ func errNoIncrementalState(old *Tree) error {
 		return errors.New("old tree incremental state is incomplete")
 	}
 	return nil
+}
+
+func fullReparseFailureError(reason string, err error) error {
+	if reason == "" {
+		return fmt.Errorf("full reparse failed: %w", err)
+	}
+	return fmt.Errorf("%s: %w", reason, err)
 }
