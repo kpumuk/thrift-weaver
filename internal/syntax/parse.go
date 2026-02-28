@@ -339,7 +339,7 @@ func buildSyntaxTreeFromRawWithLexResultAndReuse(
 	out.Diagnostics = append(out.Diagnostics, mapLexerDiagnostics(lexRes.Diagnostics)...)
 	out.Diagnostics = append(out.Diagnostics, validateTokenInvariants(sourceCopy, out.Tokens)...)
 
-	flatNodes, err := rawTree.Flatten(ctx)
+	flatNodes, err := rawTree.FlattenInto(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

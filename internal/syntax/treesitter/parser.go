@@ -121,6 +121,11 @@ type Parser struct {
 	nodeType     api.Function
 
 	parserPtr uint64
+
+	flatNodesBufPtr      uint64
+	flatNodesBufCapBytes uint64
+	flatNodesScratch     []FlatNode
+	symbolTypeScratch    map[uint16]uint32
 }
 
 // NewParser creates a parser and validates the wasm module ABI/checksum.
@@ -163,6 +168,8 @@ func NewParser() (*Parser, error) {
 		nodeInspect:  mustExportedFunction(mod, "tw_node_inspect"),
 		nodeChildren: mustExportedFunction(mod, "tw_node_children"),
 		nodeType:     mustExportedFunction(mod, "tw_node_type"),
+
+		symbolTypeScratch: make(map[uint16]uint32, 64),
 	}
 
 	parserNew := mustExportedFunction(mod, "tw_parser_new")
@@ -207,6 +214,9 @@ func (p *Parser) Close() {
 		_, _ = p.parserDelete.Call(ctx, p.parserPtr)
 		p.parserPtr = 0
 	}
+	p.releaseFlatNodesBuffer()
+	p.flatNodesScratch = nil
+	p.symbolTypeScratch = nil
 	if p.module != nil {
 		_ = p.module.Close(ctx)
 		p.module = nil
@@ -280,13 +290,23 @@ func (t *Tree) Root() Node {
 
 // Flatten exports the tree as a pre-order flat node stream with parent indices.
 func (t *Tree) Flatten(ctx context.Context) ([]FlatNode, error) {
+	flat, err := t.FlattenInto(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return append([]FlatNode(nil), flat...), nil
+}
+
+// FlattenInto exports the tree as a pre-order flat node stream with parent indices into dst.
+// The returned slice aliases parser-owned scratch memory when dst is nil.
+func (t *Tree) FlattenInto(ctx context.Context, dst []FlatNode) ([]FlatNode, error) {
 	if t == nil || t.owner == nil || t.treePtr == 0 {
 		return nil, errors.New("nil tree")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return t.owner.flattenTreeFromWASM(ctx, t.treePtr)
+	return t.owner.flattenTreeFromWASM(ctx, t.treePtr, dst)
 }
 
 // ApplyEdit applies an incremental input edit to this tree.
@@ -425,7 +445,7 @@ func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error
 	}, nil
 }
 
-func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]FlatNode, error) {
+func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64, dst []FlatNode) ([]FlatNode, error) {
 	total, err := p.callU32(ctx, p.treeExportNodes, treePtr, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("count flat nodes: %w", err)
@@ -435,11 +455,10 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 	}
 
 	byteSize := uint64(total) * wasmFlatNodeSize
-	nodesPtr, err := p.callU64(ctx, p.malloc, byteSize)
+	nodesPtr, err := p.ensureFlatNodesBuffer(ctx, byteSize)
 	if err != nil {
 		return nil, fmt.Errorf("alloc flat nodes buffer: %w", err)
 	}
-	defer p.freePtr(nodesPtr)
 
 	written, err := p.callU32(ctx, p.treeExportNodes, treePtr, nodesPtr, uint64(total))
 	if err != nil {
@@ -469,8 +488,10 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 		return nil, fmt.Errorf("read flat nodes buffer: ptr=%d size=%d", nodesPtr, byteSize)
 	}
 
-	out := make([]FlatNode, written)
-	symbolTypePtrs := make(map[uint16]uint32, 64)
+	out := p.acquireFlatNodesScratch(dst, written)
+	p.flatNodesScratch = out
+
+	clear(p.symbolTypeScratch)
 	for i := range written {
 		base := int(i * wasmFlatNodeSize)
 		symbol32 := binary.LittleEndian.Uint32(buf[base : base+4])
@@ -481,8 +502,8 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 		flags := binary.LittleEndian.Uint32(buf[base+16 : base+20])
 		typePtr := binary.LittleEndian.Uint32(buf[base+20 : base+24])
 		parentPlusOne := binary.LittleEndian.Uint32(buf[base+24 : base+28])
-		if _, ok := symbolTypePtrs[symbol]; !ok {
-			symbolTypePtrs[symbol] = typePtr
+		if _, ok := p.symbolTypeScratch[symbol]; !ok {
+			p.symbolTypeScratch[symbol] = typePtr
 		}
 
 		parent := -1
@@ -503,7 +524,7 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 			Parent:     parent,
 		}
 	}
-	for symbol, typePtr := range symbolTypePtrs {
+	for symbol, typePtr := range p.symbolTypeScratch {
 		if _, cached := lookupNodeKind(symbol); cached {
 			continue
 		}
@@ -514,6 +535,42 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 		rememberNodeKind(symbol, kind)
 	}
 	return out, nil
+}
+
+func (p *Parser) ensureFlatNodesBuffer(ctx context.Context, byteSize uint64) (uint64, error) {
+	if byteSize == 0 {
+		return 0, nil
+	}
+	if p.flatNodesBufPtr != 0 && p.flatNodesBufCapBytes >= byteSize {
+		return p.flatNodesBufPtr, nil
+	}
+	p.releaseFlatNodesBuffer()
+	ptr, err := p.callU64(ctx, p.malloc, byteSize)
+	if err != nil {
+		return 0, err
+	}
+	p.flatNodesBufPtr = ptr
+	p.flatNodesBufCapBytes = byteSize
+	return ptr, nil
+}
+
+func (p *Parser) releaseFlatNodesBuffer() {
+	if p.flatNodesBufPtr == 0 {
+		return
+	}
+	p.freePtr(p.flatNodesBufPtr)
+	p.flatNodesBufPtr = 0
+	p.flatNodesBufCapBytes = 0
+}
+
+func (p *Parser) acquireFlatNodesScratch(dst []FlatNode, count uint32) []FlatNode {
+	if dst == nil {
+		dst = p.flatNodesScratch
+	}
+	if cap(dst) < int(count) {
+		return make([]FlatNode, count)
+	}
+	return dst[:count]
 }
 
 func (p *Parser) buildTreeFromWASM(ctx context.Context, treePtr uint64) (*RawNode, error) {
