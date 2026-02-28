@@ -24,6 +24,7 @@ const (
 	wasmInputEditSize    = 36
 	wasmChangedRangeSize = 24
 	wasmNodeInfoSize     = 20
+	wasmFlatNodeSize     = 28
 )
 
 const (
@@ -66,6 +67,7 @@ var requiredWASMExports = []string{
 	"tw_tree_delete",
 	"tw_tree_edit",
 	"tw_tree_changed_ranges",
+	"tw_tree_export_nodes",
 	"tw_tree_root_node",
 	"tw_node_inspect",
 	"tw_node_children",
@@ -111,6 +113,7 @@ type Parser struct {
 	treeDelete        api.Function
 	treeEdit          api.Function
 	treeChangedRanges api.Function
+	treeExportNodes   api.Function
 	treeRootNode      api.Function
 
 	nodeInspect  api.Function
@@ -154,6 +157,7 @@ func NewParser() (*Parser, error) {
 		treeDelete:        mustExportedFunction(mod, "tw_tree_delete"),
 		treeEdit:          mustExportedFunction(mod, "tw_tree_edit"),
 		treeChangedRanges: mustExportedFunction(mod, "tw_tree_changed_ranges"),
+		treeExportNodes:   mustExportedFunction(mod, "tw_tree_export_nodes"),
 		treeRootNode:      mustExportedFunction(mod, "tw_tree_root_node"),
 
 		nodeInspect:  mustExportedFunction(mod, "tw_node_inspect"),
@@ -214,7 +218,6 @@ type Tree struct {
 	root    *RawNode
 	owner   *Parser
 	treePtr uint64
-	hintCap int
 }
 
 // FlatNode is a compact node record emitted by Tree.Flatten.
@@ -283,7 +286,7 @@ func (t *Tree) Flatten(ctx context.Context) ([]FlatNode, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return t.owner.flattenTreeFromWASM(ctx, t.treePtr, t.hintCap)
+	return t.owner.flattenTreeFromWASM(ctx, t.treePtr)
 }
 
 // ApplyEdit applies an incremental input edit to this tree.
@@ -419,100 +422,92 @@ func (p *Parser) Parse(ctx context.Context, src []byte, old *Tree) (*Tree, error
 	return &Tree{
 		owner:   p,
 		treePtr: treePtr,
-		hintCap: estimatedFlatNodeHint(len(src)),
 	}, nil
 }
 
-func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64, hintCap int) ([]FlatNode, error) {
-	nodePtr, err := p.allocNode(ctx)
+func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]FlatNode, error) {
+	total, err := p.callU32(ctx, p.treeExportNodes, treePtr, 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("count flat nodes: %w", err)
+	}
+	if total == 0 {
+		return nil, nil
+	}
+
+	byteSize := uint64(total) * wasmFlatNodeSize
+	nodesPtr, err := p.callU64(ctx, p.malloc, byteSize)
+	if err != nil {
+		return nil, fmt.Errorf("alloc flat nodes buffer: %w", err)
+	}
+	defer p.freePtr(nodesPtr)
+
+	written, err := p.callU32(ctx, p.treeExportNodes, treePtr, nodesPtr, uint64(total))
+	if err != nil {
+		return nil, fmt.Errorf("read flat nodes: %w", err)
+	}
+	if written > total {
+		return nil, fmt.Errorf("flat node overflow: wrote=%d total=%d", written, total)
+	}
+	if written < total {
+		return nil, fmt.Errorf("flat node underflow: wrote=%d total=%d", written, total)
+	}
+
+	nodesPtr32, err := uint32FromU64(nodesPtr)
 	if err != nil {
 		return nil, err
 	}
-	defer p.freePtr(nodePtr)
-
-	infoPtr, err := p.callU64(ctx, p.malloc, wasmNodeInfoSize)
+	byteSize32, err := uint32FromU64(byteSize)
 	if err != nil {
-		return nil, fmt.Errorf("alloc node info: %w", err)
-	}
-	defer p.freePtr(infoPtr)
-
-	if _, err := p.treeRootNode.Call(ctx, treePtr, nodePtr); err != nil {
-		return nil, fmt.Errorf("get root node: %w", err)
-	}
-
-	if hintCap < 1 {
-		hintCap = estimatedFlatNodeHint(0)
-	}
-	out := make([]FlatNode, 0, hintCap)
-	if err := p.appendFlatNode(ctx, nodePtr, infoPtr, -1, &out); err != nil {
 		return nil, err
+	}
+	mem := p.module.Memory()
+	if mem == nil {
+		return nil, errors.New("missing wasm memory")
+	}
+	buf, ok := mem.Read(nodesPtr32, byteSize32)
+	if !ok {
+		return nil, fmt.Errorf("read flat nodes buffer: ptr=%d size=%d", nodesPtr, byteSize)
+	}
+
+	out := make([]FlatNode, 0, written)
+	for i := range written {
+		base := int(i * wasmFlatNodeSize)
+		symbol32 := binary.LittleEndian.Uint32(buf[base : base+4])
+		symbol, ok := uint16FromU32(symbol32)
+		if !ok {
+			return nil, fmt.Errorf("flat node symbol out of range: %d", symbol32)
+		}
+		flags := binary.LittleEndian.Uint32(buf[base+16 : base+20])
+		typePtr := binary.LittleEndian.Uint32(buf[base+20 : base+24])
+		parentPlusOne := binary.LittleEndian.Uint32(buf[base+24 : base+28])
+
+		if _, cached := lookupNodeKind(symbol); !cached {
+			kind, err := p.readCString(ctx, uint64(typePtr))
+			if err != nil {
+				return nil, fmt.Errorf("read node kind for symbol %d: %w", symbol, err)
+			}
+			rememberNodeKind(symbol, kind)
+		}
+
+		parent := -1
+		if parentPlusOne > 0 {
+			parent = int(parentPlusOne - 1)
+		}
+
+		out = append(out, FlatNode{
+			KindID:     symbol,
+			StartByte:  int(binary.LittleEndian.Uint32(buf[base+4 : base+8])),
+			EndByte:    int(binary.LittleEndian.Uint32(buf[base+8 : base+12])),
+			ChildCount: binary.LittleEndian.Uint32(buf[base+12 : base+16]),
+			IsNamed:    flags&wasmNodeFlagNamed != 0,
+			IsError:    flags&wasmNodeFlagError != 0,
+			IsMissing:  flags&wasmNodeFlagMissing != 0,
+			IsExtra:    flags&wasmNodeFlagExtra != 0,
+			HasError:   flags&wasmNodeFlagHasError != 0,
+			Parent:     parent,
+		})
 	}
 	return out, nil
-}
-
-func (p *Parser) appendFlatNode(ctx context.Context, nodePtr uint64, infoPtr uint64, parent int, out *[]FlatNode) error {
-	info, err := p.inspectNode(ctx, nodePtr, infoPtr)
-	if err != nil {
-		return err
-	}
-	if _, err := p.nodeKind(ctx, nodePtr, info.Symbol); err != nil {
-		return err
-	}
-
-	id := len(*out)
-	*out = append(*out, FlatNode{
-		KindID:     info.Symbol,
-		StartByte:  info.StartByte,
-		EndByte:    info.EndByte,
-		ChildCount: info.ChildCount,
-		IsNamed:    info.has(wasmNodeFlagNamed),
-		IsError:    info.has(wasmNodeFlagError),
-		IsMissing:  info.has(wasmNodeFlagMissing),
-		IsExtra:    info.has(wasmNodeFlagExtra),
-		HasError:   info.has(wasmNodeFlagHasError),
-		Parent:     parent,
-	})
-	if info.ChildCount == 0 {
-		return nil
-	}
-
-	childrenBufSize := uint64(info.ChildCount) * uint64(wasmNodeSize)
-	childrenBufPtr, allocErr := p.callU64(ctx, p.malloc, childrenBufSize)
-	if allocErr != nil {
-		return fmt.Errorf("alloc children buffer: %w", allocErr)
-	}
-	defer p.freePtr(childrenBufPtr)
-
-	total, err := p.callU32(ctx, p.nodeChildren, nodePtr, childrenBufPtr, uint64(info.ChildCount))
-	if err != nil {
-		return fmt.Errorf("get children: %w", err)
-	}
-	if total < info.ChildCount {
-		return fmt.Errorf("children underflow: got=%d want=%d", total, info.ChildCount)
-	}
-
-	for i := range info.ChildCount {
-		childPtr := childrenBufPtr + uint64(i)*uint64(wasmNodeSize)
-		if err := p.appendFlatNode(ctx, childPtr, infoPtr, id, out); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func estimatedFlatNodeHint(srcLen int) int {
-	const (
-		minNodes = 256
-		maxNodes = 1 << 20
-	)
-	hint := srcLen / 4
-	if hint < minNodes {
-		return minNodes
-	}
-	if hint > maxNodes {
-		return maxNodes
-	}
-	return hint
 }
 
 func (p *Parser) buildTreeFromWASM(ctx context.Context, treePtr uint64) (*RawNode, error) {

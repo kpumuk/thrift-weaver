@@ -35,6 +35,16 @@ typedef struct {
   uint32_t flags;
 } TwNodeInfo;
 
+typedef struct {
+  uint32_t symbol;
+  uint32_t start_byte;
+  uint32_t end_byte;
+  uint32_t child_count;
+  uint32_t flags;
+  uint32_t type_ptr;
+  uint32_t parent_plus_one;
+} TwFlatNode;
+
 enum {
   TW_NODE_FLAG_NAMED = 1u << 0,
   TW_NODE_FLAG_ERROR = 1u << 1,
@@ -104,6 +114,55 @@ uint32_t tw_tree_changed_ranges(uintptr_t old_tree, uintptr_t new_tree, TwChange
 
   free(ranges);
   return count;
+}
+
+static uint32_t tw_node_flags(TSNode node);
+
+static uint32_t tw_count_nodes(TSNode node) {
+  uint32_t total = 1;
+  uint32_t child_count = ts_node_child_count(node);
+  for (uint32_t i = 0; i < child_count; i++) {
+    total += tw_count_nodes(ts_node_child(node, i));
+  }
+  return total;
+}
+
+static void tw_write_flat_nodes(TSNode node, TwFlatNode *out_nodes, uint32_t out_cap, uint32_t *cursor, uint32_t parent_plus_one) {
+  uint32_t index = *cursor;
+  *cursor = index + 1;
+
+  uint32_t child_count = ts_node_child_count(node);
+  if (out_nodes != NULL && index < out_cap) {
+    out_nodes[index].symbol = (uint32_t)ts_node_symbol(node);
+    out_nodes[index].start_byte = ts_node_start_byte(node);
+    out_nodes[index].end_byte = ts_node_end_byte(node);
+    out_nodes[index].child_count = child_count;
+    out_nodes[index].flags = tw_node_flags(node);
+    out_nodes[index].type_ptr = (uint32_t)(uintptr_t)ts_node_type(node);
+    out_nodes[index].parent_plus_one = parent_plus_one;
+  }
+
+  uint32_t self_plus_one = index + 1;
+  for (uint32_t i = 0; i < child_count; i++) {
+    tw_write_flat_nodes(ts_node_child(node, i), out_nodes, out_cap, cursor, self_plus_one);
+  }
+}
+
+uint32_t tw_tree_export_nodes(uintptr_t tree, TwFlatNode *out_nodes, uint32_t out_cap) {
+  if (tree == 0) {
+    return 0;
+  }
+  TSNode root = ts_tree_root_node((TSTree *)tree);
+  if (ts_node_is_null(root)) {
+    return 0;
+  }
+  if (out_nodes == NULL || out_cap == 0) {
+    return tw_count_nodes(root);
+  }
+
+  uint32_t written = 0;
+  tw_write_flat_nodes(root, out_nodes, out_cap, &written, 0);
+  return written;
 }
 
 void tw_tree_root_node(uintptr_t tree, TSNode *out_node) {

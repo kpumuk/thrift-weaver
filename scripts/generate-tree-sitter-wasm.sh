@@ -80,6 +80,7 @@ SOURCE_DATE_EPOCH=0 \
   -Wl,--export=tw_tree_delete \
   -Wl,--export=tw_tree_edit \
   -Wl,--export=tw_tree_changed_ranges \
+  -Wl,--export=tw_tree_export_nodes \
   -Wl,--export=tw_tree_root_node \
   -Wl,--export=tw_node_inspect \
   -Wl,--export=tw_node_children \
