@@ -14,6 +14,7 @@
 It has three parts:
 
 - `thriftfmt`: a safe formatter for `.thrift` files
+- `thriftlint`: a linter for `.thrift` files
 - `thriftls`: an LSP server for editors.
 - a VS Code extension with syntax highlighting and LSP support.
 
@@ -63,6 +64,7 @@ Build the CLIs:
 
 ```bash
 go build -o thriftfmt ./cmd/thriftfmt
+go build -o thriftlint ./cmd/thriftlint
 go build -o thriftls ./cmd/thriftls
 ```
 
@@ -70,6 +72,7 @@ go build -o thriftls ./cmd/thriftls
 
 ```bash
 go install github.com/kpumuk/thrift-weaver/cmd/thriftfmt@latest
+go install github.com/kpumuk/thrift-weaver/cmd/thriftlint@latest
 go install github.com/kpumuk/thrift-weaver/cmd/thriftls@latest
 ```
 
@@ -107,6 +110,28 @@ Exit codes:
 
 > [!WARNING]
 > `thriftfmt` refuses unsafe formatting and reports errors. It does not guess.
+
+## Use `thriftlint`
+
+Common commands:
+
+```bash
+thriftlint path/to/file.thrift
+thriftlint --stdin --assume-filename foo.thrift < input.thrift
+thriftlint --format json path/to/file.thrift
+```
+
+Main flags:
+
+- `--stdin`: read source from stdin.
+- `--assume-filename`: file name used in parser context and diagnostics.
+- `--format`: `text` (default) or `json`.
+
+Exit codes:
+
+- `0`: no lint or parser diagnostics.
+- `1`: diagnostics were found.
+- `3`: internal or usage error.
 
 ## Use `thriftls`
 
@@ -174,7 +199,7 @@ If you change behavior or policy, update [RFC 0001](docs/rfcs/0001-thrift-toolin
 
 ## Repository Map
 
-- `cmd/`: CLI entry points (`thriftfmt`, `thriftls`).
+- `cmd/`: CLI entry points (`thriftfmt`, `thriftlint`, `thriftls`).
 - `internal/`: core engine packages (`text`, `lexer`, `syntax`, `format`, `lsp`).
 - `grammar/tree-sitter-thrift/`: Thrift grammar and generated parser assets.
 - `editors/vscode/`: VS Code extension client.

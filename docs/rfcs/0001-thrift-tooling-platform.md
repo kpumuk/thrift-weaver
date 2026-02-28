@@ -1,4 +1,4 @@
-# RFC 0001: Thrift Tooling Platform (`thriftfmt`, `thriftls`, VS Code Extension)
+# RFC 0001: Thrift Tooling Platform (`thriftfmt`, `thriftlint`, `thriftls`, VS Code Extension)
 
 - Status: Accepted
 - Authors: Dmytro Shteflyuk
@@ -10,6 +10,7 @@
 This RFC proposes a new standalone tooling project for Thrift IDL editing and formatting, consisting of:
 
 - `thriftfmt`: a stable, lossless-aware formatter for `.thrift` files
+- `thriftlint`: a diagnostics-oriented linter for `.thrift` files
 - `thriftls`: an LSP server for editor integrations
 - a VS Code extension with syntax highlighting and LSP integration
 
@@ -35,6 +36,7 @@ Building a dedicated tooling project allows:
 ## Goals
 
 - Provide a deterministic, idempotent Thrift formatter (`thriftfmt`)
+- Provide a Thrift linter CLI (`thriftlint`) that reuses parser diagnostics and lint rules
 - Provide a production-quality LSP server (`thriftls`) for editors
 - Provide a VS Code extension with syntax highlighting and LSP client integration
 - Preserve comments and syntax fidelity where formatter policy permits
@@ -161,6 +163,8 @@ thrift-weaver/
       0001-thrift-tooling-platform.md
   cmd/
     thriftfmt/
+      main.go
+    thriftlint/
       main.go
     thriftls/
       main.go
@@ -1064,6 +1068,7 @@ Recommended additions (required before beta):
 ### Release Artifacts
 
 - `thriftfmt` binaries (macOS/Linux/Windows)
+- `thriftlint` binaries (macOS/Linux/Windows)
 - `thriftls` binaries (macOS/Linux/Windows)
 - `thriftls` release manifest (machine-readable platform matrix + checksums)
 - checksums file (SHA-256) for published binaries/artifacts

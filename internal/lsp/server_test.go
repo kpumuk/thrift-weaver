@@ -25,6 +25,9 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	if !got.TextDocumentSync.OpenClose || got.TextDocumentSync.Change != TextDocumentSyncKindIncremental {
 		t.Fatalf("unexpected textDocumentSync: %+v", got.TextDocumentSync)
 	}
+	if got.TextDocumentSync.Save == nil || got.TextDocumentSync.Save.IncludeText {
+		t.Fatalf("unexpected didSave sync options: %+v", got.TextDocumentSync.Save)
+	}
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
 		t.Fatalf("unexpected capabilities: %+v", got)
 	}
@@ -148,6 +151,81 @@ func TestServerRunPublishesDiagnosticsOnOpenChangeClose(t *testing.T) {
 	}
 	if len(closeDiag.Diagnostics) != 0 {
 		t.Fatalf("expected empty diagnostics on close, got %d", len(closeDiag.Diagnostics))
+	}
+}
+
+func TestServerRunPublishesLintDiagnosticsOnOpenChangeSave(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{
+				URI:     "file:///lint.thrift",
+				Version: 1,
+				Text:    "struct S {\n  string name,\n}\n",
+			},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///lint.thrift", Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct S {\n  1: string name xsd_optional,\n}\n",
+			}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didSave",
+		Params: mustJSON(t, DidSaveParams{
+			TextDocument: TextDocumentIdentifier{URI: "file:///lint.thrift"},
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+	notifications := collectMethodMessages(t, msgs, "textDocument/publishDiagnostics")
+	if len(notifications) != 3 {
+		t.Fatalf("publishDiagnostics count=%d, want 3", len(notifications))
+	}
+
+	var openDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[0].Params, &openDiag)
+	if openDiag.Version == nil || *openDiag.Version != 1 {
+		t.Fatalf("open diagnostics version=%v, want 1", openDiag.Version)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_FIELD_ID_REQUIRED") {
+		t.Fatalf("expected LINT_FIELD_ID_REQUIRED in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+
+	var changeDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[1].Params, &changeDiag)
+	if changeDiag.Version == nil || *changeDiag.Version != 2 {
+		t.Fatalf("change diagnostics version=%v, want 2", changeDiag.Version)
+	}
+	if containsDiagnosticCode(changeDiag.Diagnostics, "LINT_FIELD_ID_REQUIRED") {
+		t.Fatalf("didChange diagnostics should not include LINT_FIELD_ID_REQUIRED: %+v", changeDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(changeDiag.Diagnostics, "LINT_DEPRECATED_FIELD_XSD_OPTIONAL") {
+		t.Fatalf("didChange diagnostics missing LINT_DEPRECATED_FIELD_XSD_OPTIONAL: %+v", changeDiag.Diagnostics)
+	}
+
+	var saveDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[2].Params, &saveDiag)
+	if saveDiag.Version == nil || *saveDiag.Version != 2 {
+		t.Fatalf("save diagnostics version=%v, want 2", saveDiag.Version)
+	}
+	if !containsDiagnosticCode(saveDiag.Diagnostics, "LINT_DEPRECATED_FIELD_XSD_OPTIONAL") {
+		t.Fatalf("didSave diagnostics missing LINT_DEPRECATED_FIELD_XSD_OPTIONAL: %+v", saveDiag.Diagnostics)
 	}
 }
 
@@ -656,6 +734,15 @@ func findDocumentSymbol(in []DocumentSymbol, name string) *DocumentSymbol {
 func hasFoldingRangeStartingAtLine(in []FoldingRange, line int) bool {
 	for _, fr := range in {
 		if fr.StartLine == line && fr.EndLine > fr.StartLine {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDiagnosticCode(in []Diagnostic, code string) bool {
+	for _, d := range in {
+		if d.Code == code {
 			return true
 		}
 	}

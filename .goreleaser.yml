@@ -39,6 +39,18 @@ builds:
     goarch:
       - amd64
       - arm64
+  - id: thriftlint
+    main: ./cmd/thriftlint
+    binary: thriftlint
+    flags: *go_build_flags
+    env: *go_pure_env
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - id: thriftfmt
@@ -55,6 +67,17 @@ archives:
   - id: thriftls
     ids:
       - thriftls
+    name_template: >-
+      {{ .Binary }}_
+      {{- .Version }}-
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+  - id: thriftlint
+    ids:
+      - thriftlint
     name_template: >-
       {{ .Binary }}_
       {{- .Version }}-
