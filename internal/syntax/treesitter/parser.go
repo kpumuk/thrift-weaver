@@ -469,7 +469,8 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 		return nil, fmt.Errorf("read flat nodes buffer: ptr=%d size=%d", nodesPtr, byteSize)
 	}
 
-	out := make([]FlatNode, 0, written)
+	out := make([]FlatNode, written)
+	symbolTypePtrs := make(map[uint16]uint32, 64)
 	for i := range written {
 		base := int(i * wasmFlatNodeSize)
 		symbol32 := binary.LittleEndian.Uint32(buf[base : base+4])
@@ -480,13 +481,8 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 		flags := binary.LittleEndian.Uint32(buf[base+16 : base+20])
 		typePtr := binary.LittleEndian.Uint32(buf[base+20 : base+24])
 		parentPlusOne := binary.LittleEndian.Uint32(buf[base+24 : base+28])
-
-		if _, cached := lookupNodeKind(symbol); !cached {
-			kind, err := p.readCString(ctx, uint64(typePtr))
-			if err != nil {
-				return nil, fmt.Errorf("read node kind for symbol %d: %w", symbol, err)
-			}
-			rememberNodeKind(symbol, kind)
+		if _, ok := symbolTypePtrs[symbol]; !ok {
+			symbolTypePtrs[symbol] = typePtr
 		}
 
 		parent := -1
@@ -494,7 +490,7 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 			parent = int(parentPlusOne - 1)
 		}
 
-		out = append(out, FlatNode{
+		out[i] = FlatNode{
 			KindID:     symbol,
 			StartByte:  int(binary.LittleEndian.Uint32(buf[base+4 : base+8])),
 			EndByte:    int(binary.LittleEndian.Uint32(buf[base+8 : base+12])),
@@ -505,7 +501,17 @@ func (p *Parser) flattenTreeFromWASM(ctx context.Context, treePtr uint64) ([]Fla
 			IsExtra:    flags&wasmNodeFlagExtra != 0,
 			HasError:   flags&wasmNodeFlagHasError != 0,
 			Parent:     parent,
-		})
+		}
+	}
+	for symbol, typePtr := range symbolTypePtrs {
+		if _, cached := lookupNodeKind(symbol); cached {
+			continue
+		}
+		kind, err := p.readCString(ctx, uint64(typePtr))
+		if err != nil {
+			return nil, fmt.Errorf("read node kind for symbol %d: %w", symbol, err)
+		}
+		rememberNodeKind(symbol, kind)
 	}
 	return out, nil
 }
