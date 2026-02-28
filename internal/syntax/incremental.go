@@ -277,7 +277,7 @@ func fullReparseWithExistingParser(ctx context.Context, old *Tree, src []byte, o
 		}
 		return buildDegradedTreeForParserFailure(src, opts, fullReparseFailureError(reason, err)), nil
 	}
-	out, err := buildSyntaxTreeFromRaw(src, opts, newRawTree)
+	out, err := buildSyntaxTreeFromRaw(ctx, src, opts, newRawTree)
 	if err != nil {
 		newRawTree.Close()
 		return nil, err

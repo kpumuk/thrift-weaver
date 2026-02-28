@@ -35,7 +35,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 		}
 		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("parse source: %w", err)), nil
 	}
-	out, err := buildSyntaxTreeFromRawWithLexResult(src, opts, rawTree, lexRes)
+	out, err := buildSyntaxTreeFromRawWithLexResult(ctx, src, opts, rawTree, lexRes)
 	if err != nil {
 		rawTree.Close()
 		parser.Close()
@@ -169,7 +169,7 @@ func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte,
 		)
 	}
 
-	out, err := buildSyntaxTreeFromRaw(src, opts, incrementalRaw)
+	out, err := buildSyntaxTreeFromRaw(ctx, src, opts, incrementalRaw)
 	if err != nil {
 		incrementalRaw.Close()
 		return nil, err
@@ -232,7 +232,7 @@ func verifyIncrementalReparse(ctx context.Context, incrementalTree *Tree, state 
 		return true, nil, nil
 	}
 
-	fullTree, buildErr := buildSyntaxTreeFromRaw(src, opts, fullRaw)
+	fullTree, buildErr := buildSyntaxTreeFromRaw(ctx, src, opts, fullRaw)
 	if buildErr != nil {
 		fullRaw.Close()
 		return true, nil, buildErr
@@ -268,9 +268,9 @@ func fallbackIncrementalReparse(
 	return fullReparseWithExistingParser(ctx, old, src, opts, reason)
 }
 
-func buildSyntaxTreeFromRaw(src []byte, opts ParseOptions, rawTree *ts.Tree) (*Tree, error) {
+func buildSyntaxTreeFromRaw(ctx context.Context, src []byte, opts ParseOptions, rawTree *ts.Tree) (*Tree, error) {
 	lexRes := lexer.Lex(src)
-	return buildSyntaxTreeFromRawWithLexResult(src, opts, rawTree, lexRes)
+	return buildSyntaxTreeFromRawWithLexResult(ctx, src, opts, rawTree, lexRes)
 }
 
 func buildDegradedTreeForParserFailure(src []byte, opts ParseOptions, parseErr error) *Tree {
@@ -294,9 +294,12 @@ func buildDegradedTreeForParserFailureWithLexResult(src []byte, opts ParseOption
 	return out
 }
 
-func buildSyntaxTreeFromRawWithLexResult(src []byte, opts ParseOptions, rawTree *ts.Tree, lexRes lexer.Result) (*Tree, error) {
+func buildSyntaxTreeFromRawWithLexResult(ctx context.Context, src []byte, opts ParseOptions, rawTree *ts.Tree, lexRes lexer.Result) (*Tree, error) {
 	if rawTree == nil {
 		return nil, errors.New("tree-sitter tree is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	sourceCopy := slices.Clone(src)
@@ -311,34 +314,24 @@ func buildSyntaxTreeFromRawWithLexResult(src []byte, opts ParseOptions, rawTree 
 	out.Diagnostics = append(out.Diagnostics, mapLexerDiagnostics(lexRes.Diagnostics)...)
 	out.Diagnostics = append(out.Diagnostics, validateTokenInvariants(sourceCopy, out.Tokens)...)
 
+	flatNodes, err := rawTree.Flatten(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(flatNodes) == 0 {
+		return nil, errors.New("tree-sitter root node is nil")
+	}
+
 	builder := cstBuilder{
 		tokens:    out.Tokens,
 		nodes:     &out.Nodes,
 		lineIndex: out.LineIndex,
 	}
-	root := rawTree.Root().Inner()
-	if root == nil {
-		return nil, errors.New("tree-sitter root node is nil")
-	}
-	out.Nodes = make([]Node, 1, 1+countRawNodes(root))
-	out.Root = builder.buildNode(root, NoNode)
+	out.Nodes = make([]Node, 1, 1+len(flatNodes))
+	out.Root = builder.buildFlatTree(flatNodes)
 	out.Diagnostics = append(out.Diagnostics, builder.diagnostics...)
-	out.Diagnostics = append(out.Diagnostics, collectParserDiagnostics(root, out.LineIndex)...)
+	out.Diagnostics = append(out.Diagnostics, collectParserDiagnostics(flatNodes, out.LineIndex)...)
 	return out, nil
-}
-
-func countRawNodes(root *ts.RawNode) int {
-	if root == nil {
-		return 0
-	}
-	total := 1
-	for _, child := range root.Children {
-		if child == nil || child.IsExtra {
-			continue
-		}
-		total += countRawNodes(child)
-	}
-	return total
 }
 
 type cstBuilder struct {
@@ -348,60 +341,89 @@ type cstBuilder struct {
 	diagnostics []Diagnostic
 }
 
-func (b *cstBuilder) buildNode(raw *ts.RawNode, parent NodeID) NodeID {
-	id := nodeIDFromLen(len(*b.nodes))
-	sp := spanFromRawNode(raw, b.lineIndex)
-	firstTok, lastTok, rangeErr := tokenRangeForSpan(b.tokens, sp)
-	if rangeErr != nil {
-		b.diagnostics = append(b.diagnostics, internalAlignmentDiag(sp, rangeErr.Error()))
+func (b *cstBuilder) buildFlatTree(flatNodes []ts.FlatNode) NodeID {
+	if len(flatNodes) == 0 {
+		return NoNode
 	}
 
-	flags := nodeFlagsFromRaw(raw)
-	if raw.HasError {
-		flags |= NodeFlagRecovered
-	}
-	*b.nodes = append(*b.nodes, Node{
-		ID:         id,
-		Kind:       NodeKind(raw.KindID),
-		Span:       sp,
-		FirstToken: firstTok,
-		LastToken:  lastTok,
-		Parent:     parent,
-		Flags:      flags,
-	})
+	includedByFlat := make([]bool, len(flatNodes))
+	idByFlat := make([]NodeID, len(flatNodes))
+	rootID := NoNode
 
-	children := raw.Children
-	if len(children) == 0 {
-		leaf := &(*b.nodes)[id]
-		for i := firstTok; i <= lastTok && int(i) < len(b.tokens); i++ {
-			if b.tokens[i].Kind == lexer.TokenEOF {
-				continue
-			}
-			if !leaf.Span.IsEmpty() && !leaf.Span.Intersects(b.tokens[i].Span) {
-				continue
-			}
-			leaf.Children = append(leaf.Children, ChildRef{IsToken: true, Index: i})
-		}
-		return id
-	}
-
-	childRefs := make([]ChildRef, 0, len(children))
-	for _, child := range children {
-		if child == nil || child.IsExtra {
+	for i, flat := range flatNodes {
+		parentID, include := b.parentFromFlat(flat, i, includedByFlat, idByFlat)
+		if !include {
 			continue
 		}
-		childID := b.buildNode(child, id)
-		childRefs = append(childRefs, ChildRef{IsToken: false, Index: uint32(childID)})
+
+		id := nodeIDFromLen(len(*b.nodes))
+		sp := spanFromFlatNode(flat, b.lineIndex)
+		firstTok, lastTok, rangeErr := tokenRangeForSpan(b.tokens, sp)
+		if rangeErr != nil {
+			b.diagnostics = append(b.diagnostics, internalAlignmentDiag(sp, rangeErr.Error()))
+		}
+
+		flags := nodeFlagsFromFlat(flat)
+		if flat.HasError {
+			flags |= NodeFlagRecovered
+		}
+		*b.nodes = append(*b.nodes, Node{
+			ID:         id,
+			Kind:       NodeKind(flat.KindID),
+			Span:       sp,
+			FirstToken: firstTok,
+			LastToken:  lastTok,
+			Parent:     parentID,
+			Flags:      flags,
+		})
+
+		includedByFlat[i] = true
+		idByFlat[i] = id
+		if parentID == NoNode {
+			rootID = id
+		} else {
+			(*b.nodes)[parentID].Children = append((*b.nodes)[parentID].Children, ChildRef{IsToken: false, Index: uint32(id)})
+		}
+
+		if flat.ChildCount == 0 {
+			if len(b.tokens) == 0 {
+				continue
+			}
+			leaf := &(*b.nodes)[id]
+			maxTok := min(lastTok, uint32FromInt(len(b.tokens)-1))
+			for tok := firstTok; tok <= maxTok; tok++ {
+				if b.tokens[tok].Kind == lexer.TokenEOF {
+					continue
+				}
+				if !leaf.Span.IsEmpty() && !leaf.Span.Intersects(b.tokens[tok].Span) {
+					continue
+				}
+				leaf.Children = append(leaf.Children, ChildRef{IsToken: true, Index: tok})
+			}
+		}
 	}
-	(*b.nodes)[id].Children = childRefs
-	return id
+	return rootID
 }
 
-func nodeFlagsFromRaw(n *ts.RawNode) NodeFlags {
-	var flags NodeFlags
-	if n == nil {
-		return flags
+func (b *cstBuilder) parentFromFlat(flat ts.FlatNode, idx int, includedByFlat []bool, idByFlat []NodeID) (NodeID, bool) {
+	if flat.IsExtra {
+		return NoNode, false
 	}
+	if flat.Parent < 0 {
+		return NoNode, true
+	}
+	if flat.Parent >= idx || flat.Parent >= len(includedByFlat) {
+		b.diagnostics = append(b.diagnostics, internalAlignmentDiag(text.Span{}, fmt.Sprintf("invalid flat parent index: child=%d parent=%d", idx, flat.Parent)))
+		return NoNode, false
+	}
+	if !includedByFlat[flat.Parent] {
+		return NoNode, false
+	}
+	return idByFlat[flat.Parent], true
+}
+
+func nodeFlagsFromFlat(n ts.FlatNode) NodeFlags {
+	var flags NodeFlags
 	if n.IsNamed {
 		flags |= NodeFlagNamed
 	}
@@ -414,22 +436,14 @@ func nodeFlagsFromRaw(n *ts.RawNode) NodeFlags {
 	return flags
 }
 
-func spanFromRawNode(n *ts.RawNode, li *text.LineIndex) text.Span {
-	if n == nil || li == nil {
+func spanFromFlatNode(n ts.FlatNode, li *text.LineIndex) text.Span {
+	if li == nil {
 		return text.Span{}
 	}
 	if n.StartByte >= 0 && n.EndByte >= n.StartByte && n.EndByte <= int(li.SourceLen()) {
 		return text.Span{Start: text.ByteOffset(n.StartByte), End: text.ByteOffset(n.EndByte)}
 	}
-	start, err := li.PointToOffset(text.Point{Line: n.StartRow, Column: n.StartCol})
-	if err != nil {
-		return text.Span{}
-	}
-	end, err := li.PointToOffset(text.Point{Line: n.EndRow, Column: n.EndCol})
-	if err != nil {
-		return text.Span{}
-	}
-	return text.Span{Start: start, End: end}
+	return text.Span{}
 }
 
 func mapLexerDiagnostics(in []lexer.Diagnostic) []Diagnostic {
@@ -447,18 +461,18 @@ func mapLexerDiagnostics(in []lexer.Diagnostic) []Diagnostic {
 	return out
 }
 
-func collectParserDiagnostics(root *ts.RawNode, li *text.LineIndex) []Diagnostic {
-	if root == nil {
+func collectParserDiagnostics(flatNodes []ts.FlatNode, li *text.LineIndex) []Diagnostic {
+	if len(flatNodes) == 0 {
 		return nil
 	}
 	var out []Diagnostic
-	walkRaw(root, func(n *ts.RawNode) {
-		sp := spanFromRawNode(n, li)
+	for _, n := range flatNodes {
+		sp := spanFromFlatNode(n, li)
 		switch {
 		case n.IsMissing:
 			out = append(out, Diagnostic{
 				Code:        DiagnosticParserMissingNode,
-				Message:     "missing " + n.Kind,
+				Message:     "missing " + KindName(NodeKind(n.KindID)),
 				Severity:    SeverityError,
 				Span:        sp,
 				Source:      "parser",
@@ -474,18 +488,8 @@ func collectParserDiagnostics(root *ts.RawNode, li *text.LineIndex) []Diagnostic
 				Recoverable: true,
 			})
 		}
-	})
+	}
 	return out
-}
-
-func walkRaw(root *ts.RawNode, visit func(*ts.RawNode)) {
-	if root == nil {
-		return
-	}
-	visit(root)
-	for _, child := range root.Children {
-		walkRaw(child, visit)
-	}
 }
 
 func validateTokenInvariants(src []byte, tokens []lexer.Token) []Diagnostic {
