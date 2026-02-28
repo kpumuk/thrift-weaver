@@ -27,6 +27,22 @@ typedef struct {
   uint32_t end_col;
 } TwChangedRange;
 
+typedef struct {
+  uint32_t symbol;
+  uint32_t start_byte;
+  uint32_t end_byte;
+  uint32_t child_count;
+  uint32_t flags;
+} TwNodeInfo;
+
+enum {
+  TW_NODE_FLAG_NAMED = 1u << 0,
+  TW_NODE_FLAG_ERROR = 1u << 1,
+  TW_NODE_FLAG_MISSING = 1u << 2,
+  TW_NODE_FLAG_EXTRA = 1u << 3,
+  TW_NODE_FLAG_HAS_ERROR = 1u << 4,
+};
+
 uintptr_t tw_parser_new(void) {
   return (uintptr_t)ts_parser_new();
 }
@@ -94,54 +110,59 @@ void tw_tree_root_node(uintptr_t tree, TSNode *out_node) {
   *out_node = ts_tree_root_node((TSTree *)tree);
 }
 
-uint32_t tw_node_child_count(const TSNode *node) {
-  return ts_node_child_count(*node);
+static uint32_t tw_node_flags(TSNode node) {
+  uint32_t flags = 0;
+  if (ts_node_is_named(node)) {
+    flags |= TW_NODE_FLAG_NAMED;
+  }
+  if (ts_node_is_error(node)) {
+    flags |= TW_NODE_FLAG_ERROR;
+  }
+  if (ts_node_is_missing(node)) {
+    flags |= TW_NODE_FLAG_MISSING;
+  }
+  if (ts_node_is_extra(node)) {
+    flags |= TW_NODE_FLAG_EXTRA;
+  }
+  if (ts_node_has_error(node)) {
+    flags |= TW_NODE_FLAG_HAS_ERROR;
+  }
+  return flags;
 }
 
-void tw_node_child(const TSNode *node, uint32_t index, TSNode *out_node) {
-  *out_node = ts_node_child(*node, index);
+void tw_node_inspect(const TSNode *node, TwNodeInfo *out_info) {
+  if (node == NULL || out_info == NULL) {
+    return;
+  }
+  TSNode n = *node;
+
+  out_info->symbol = (uint32_t)ts_node_symbol(n);
+  out_info->start_byte = ts_node_start_byte(n);
+  out_info->end_byte = ts_node_end_byte(n);
+  out_info->child_count = ts_node_child_count(n);
+  out_info->flags = tw_node_flags(n);
 }
 
-uint32_t tw_node_named_child_count(const TSNode *node) {
-  return ts_node_named_child_count(*node);
-}
+uint32_t tw_node_children(const TSNode *node, TSNode *out_nodes, uint32_t out_cap) {
+  if (node == NULL) {
+    return 0;
+  }
 
-void tw_node_named_child(const TSNode *node, uint32_t index, TSNode *out_node) {
-  *out_node = ts_node_named_child(*node, index);
+  uint32_t count = ts_node_child_count(*node);
+  if (out_nodes == NULL || out_cap == 0) {
+    return count;
+  }
+
+  uint32_t write_count = count;
+  if (write_count > out_cap) {
+    write_count = out_cap;
+  }
+  for (uint32_t i = 0; i < write_count; i++) {
+    out_nodes[i] = ts_node_child(*node, i);
+  }
+  return count;
 }
 
 uintptr_t tw_node_type(const TSNode *node) {
   return (uintptr_t)ts_node_type(*node);
-}
-
-uint32_t tw_node_symbol(const TSNode *node) {
-  return (uint32_t)ts_node_symbol(*node);
-}
-
-uint32_t tw_node_start_byte(const TSNode *node) {
-  return ts_node_start_byte(*node);
-}
-
-uint32_t tw_node_end_byte(const TSNode *node) {
-  return ts_node_end_byte(*node);
-}
-
-uint32_t tw_node_is_error(const TSNode *node) {
-  return ts_node_is_error(*node) ? 1 : 0;
-}
-
-uint32_t tw_node_is_missing(const TSNode *node) {
-  return ts_node_is_missing(*node) ? 1 : 0;
-}
-
-uint32_t tw_node_is_named(const TSNode *node) {
-  return ts_node_is_named(*node) ? 1 : 0;
-}
-
-uint32_t tw_node_is_extra(const TSNode *node) {
-  return ts_node_is_extra(*node) ? 1 : 0;
-}
-
-uint32_t tw_node_has_error(const TSNode *node) {
-  return ts_node_has_error(*node) ? 1 : 0;
 }

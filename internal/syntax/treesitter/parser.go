@@ -23,6 +23,15 @@ const wasmNodeSize = 24
 const (
 	wasmInputEditSize    = 36
 	wasmChangedRangeSize = 24
+	wasmNodeInfoSize     = 20
+)
+
+const (
+	wasmNodeFlagNamed uint32 = 1 << iota
+	wasmNodeFlagError
+	wasmNodeFlagMissing
+	wasmNodeFlagExtra
+	wasmNodeFlagHasError
 )
 
 var (
@@ -58,19 +67,9 @@ var requiredWASMExports = []string{
 	"tw_tree_edit",
 	"tw_tree_changed_ranges",
 	"tw_tree_root_node",
-	"tw_node_child_count",
-	"tw_node_child",
-	"tw_node_named_child_count",
-	"tw_node_named_child",
+	"tw_node_inspect",
+	"tw_node_children",
 	"tw_node_type",
-	"tw_node_symbol",
-	"tw_node_start_byte",
-	"tw_node_end_byte",
-	"tw_node_is_error",
-	"tw_node_is_missing",
-	"tw_node_is_named",
-	"tw_node_is_extra",
-	"tw_node_has_error",
 }
 
 // Point is a UTF-8 byte-based tree-sitter point.
@@ -114,19 +113,9 @@ type Parser struct {
 	treeChangedRanges api.Function
 	treeRootNode      api.Function
 
-	nodeChildCount      api.Function
-	nodeChild           api.Function
-	nodeNamedChildCount api.Function
-	nodeNamedChild      api.Function
-	nodeType            api.Function
-	nodeSymbol          api.Function
-	nodeStartByte       api.Function
-	nodeEndByte         api.Function
-	nodeIsError         api.Function
-	nodeIsMissing       api.Function
-	nodeIsNamed         api.Function
-	nodeIsExtra         api.Function
-	nodeHasError        api.Function
+	nodeInspect  api.Function
+	nodeChildren api.Function
+	nodeType     api.Function
 
 	parserPtr uint64
 }
@@ -167,19 +156,9 @@ func NewParser() (*Parser, error) {
 		treeChangedRanges: mustExportedFunction(mod, "tw_tree_changed_ranges"),
 		treeRootNode:      mustExportedFunction(mod, "tw_tree_root_node"),
 
-		nodeChildCount:      mustExportedFunction(mod, "tw_node_child_count"),
-		nodeChild:           mustExportedFunction(mod, "tw_node_child"),
-		nodeNamedChildCount: mustExportedFunction(mod, "tw_node_named_child_count"),
-		nodeNamedChild:      mustExportedFunction(mod, "tw_node_named_child"),
-		nodeType:            mustExportedFunction(mod, "tw_node_type"),
-		nodeSymbol:          mustExportedFunction(mod, "tw_node_symbol"),
-		nodeStartByte:       mustExportedFunction(mod, "tw_node_start_byte"),
-		nodeEndByte:         mustExportedFunction(mod, "tw_node_end_byte"),
-		nodeIsError:         mustExportedFunction(mod, "tw_node_is_error"),
-		nodeIsMissing:       mustExportedFunction(mod, "tw_node_is_missing"),
-		nodeIsNamed:         mustExportedFunction(mod, "tw_node_is_named"),
-		nodeIsExtra:         mustExportedFunction(mod, "tw_node_is_extra"),
-		nodeHasError:        mustExportedFunction(mod, "tw_node_has_error"),
+		nodeInspect:  mustExportedFunction(mod, "tw_node_inspect"),
+		nodeChildren: mustExportedFunction(mod, "tw_node_children"),
+		nodeType:     mustExportedFunction(mod, "tw_node_type"),
 	}
 
 	parserNew := mustExportedFunction(mod, "tw_parser_new")
@@ -235,6 +214,18 @@ type Tree struct {
 	root    *RawNode
 	owner   *Parser
 	treePtr uint64
+}
+
+type nodeInfo struct {
+	Symbol     uint16
+	StartByte  int
+	EndByte    int
+	ChildCount uint32
+	Flags      uint32
+}
+
+func (n nodeInfo) has(flag uint32) bool {
+	return n.Flags&flag != 0
 }
 
 // Close releases tree resources.
@@ -413,89 +404,66 @@ func (p *Parser) buildTreeFromWASM(ctx context.Context, treePtr uint64) (*RawNod
 	}
 	defer p.freePtr(nodePtr)
 
+	infoPtr, err := p.callU64(ctx, p.malloc, wasmNodeInfoSize)
+	if err != nil {
+		return nil, fmt.Errorf("alloc node info: %w", err)
+	}
+	defer p.freePtr(infoPtr)
+
 	if _, err := p.treeRootNode.Call(ctx, treePtr, nodePtr); err != nil {
 		return nil, fmt.Errorf("get root node: %w", err)
 	}
-	return p.buildRawNode(ctx, nodePtr)
+	return p.buildRawNode(ctx, nodePtr, infoPtr)
 }
 
-func (p *Parser) buildRawNode(ctx context.Context, nodePtr uint64) (*RawNode, error) {
-	symbolID, err := p.callU32(ctx, p.nodeSymbol, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	symbol, ok := uint16FromU32(symbolID)
-	if !ok {
-		return nil, fmt.Errorf("node symbol out of range: %d", symbolID)
-	}
-
-	kind, err := p.nodeKind(ctx, nodePtr, symbol)
-	if err != nil {
-		return nil, err
-	}
-	startByte, err := p.callU32(ctx, p.nodeStartByte, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	endByte, err := p.callU32(ctx, p.nodeEndByte, nodePtr)
+func (p *Parser) buildRawNode(ctx context.Context, nodePtr uint64, infoPtr uint64) (*RawNode, error) {
+	info, err := p.inspectNode(ctx, nodePtr, infoPtr)
 	if err != nil {
 		return nil, err
 	}
 
-	isNamed, err := p.callBool(ctx, p.nodeIsNamed, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	isError, err := p.callBool(ctx, p.nodeIsError, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	isMissing, err := p.callBool(ctx, p.nodeIsMissing, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	isExtra, err := p.callBool(ctx, p.nodeIsExtra, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	hasError, err := p.callBool(ctx, p.nodeHasError, nodePtr)
+	kind, err := p.nodeKind(ctx, nodePtr, info.Symbol)
 	if err != nil {
 		return nil, err
 	}
 
-	childCount, err := p.callU32(ctx, p.nodeChildCount, nodePtr)
-	if err != nil {
-		return nil, err
-	}
-	children := make([]*RawNode, 0, childCount)
-	for i := range childCount {
-		childPtr, err := p.allocNode(ctx)
+	children := make([]*RawNode, 0, info.ChildCount)
+	if info.ChildCount > 0 {
+		childrenBufSize := uint64(info.ChildCount) * uint64(wasmNodeSize)
+		childrenBufPtr, allocErr := p.callU64(ctx, p.malloc, childrenBufSize)
+		if allocErr != nil {
+			return nil, fmt.Errorf("alloc children buffer: %w", allocErr)
+		}
+		defer p.freePtr(childrenBufPtr)
+
+		total, err := p.callU32(ctx, p.nodeChildren, nodePtr, childrenBufPtr, uint64(info.ChildCount))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get children: %w", err)
 		}
-		if _, err := p.nodeChild.Call(ctx, nodePtr, uint64(i), childPtr); err != nil {
-			p.freePtr(childPtr)
-			return nil, fmt.Errorf("get child[%d]: %w", i, err)
+		if total < info.ChildCount {
+			return nil, fmt.Errorf("children underflow: got=%d want=%d", total, info.ChildCount)
 		}
 
-		child, err := p.buildRawNode(ctx, childPtr)
-		p.freePtr(childPtr)
-		if err != nil {
-			return nil, err
+		for i := range info.ChildCount {
+			childPtr := childrenBufPtr + uint64(i)*uint64(wasmNodeSize)
+			child, err := p.buildRawNode(ctx, childPtr, infoPtr)
+			if err != nil {
+				return nil, err
+			}
+			children = append(children, child)
 		}
-		children = append(children, child)
 	}
 
 	return &RawNode{
 		Kind:      kind,
-		KindID:    symbol,
-		StartByte: int(startByte),
-		EndByte:   int(endByte),
-		IsNamed:   isNamed,
-		IsError:   isError,
-		IsMissing: isMissing,
-		IsExtra:   isExtra,
-		HasError:  hasError,
+		KindID:    info.Symbol,
+		StartByte: info.StartByte,
+		EndByte:   info.EndByte,
+		IsNamed:   info.has(wasmNodeFlagNamed),
+		IsError:   info.has(wasmNodeFlagError),
+		IsMissing: info.has(wasmNodeFlagMissing),
+		IsExtra:   info.has(wasmNodeFlagExtra),
+		HasError:  info.has(wasmNodeFlagHasError),
 		Children:  children,
 	}, nil
 }
@@ -515,6 +483,39 @@ func (p *Parser) nodeKind(ctx context.Context, nodePtr uint64, symbol uint16) (s
 	}
 	rememberNodeKind(symbol, kind)
 	return kind, nil
+}
+
+func (p *Parser) inspectNode(ctx context.Context, nodePtr uint64, infoPtr uint64) (nodeInfo, error) {
+	if _, err := p.nodeInspect.Call(ctx, nodePtr, infoPtr); err != nil {
+		return nodeInfo{}, fmt.Errorf("inspect node: %w", err)
+	}
+
+	infoPtr32, err := uint32FromU64(infoPtr)
+	if err != nil {
+		return nodeInfo{}, err
+	}
+	mem := p.module.Memory()
+	if mem == nil {
+		return nodeInfo{}, errors.New("missing wasm memory")
+	}
+	buf, ok := mem.Read(infoPtr32, wasmNodeInfoSize)
+	if !ok {
+		return nodeInfo{}, fmt.Errorf("read node info: ptr=%d size=%d", infoPtr, wasmNodeInfoSize)
+	}
+
+	symbol32 := binary.LittleEndian.Uint32(buf[0:4])
+	symbol, ok := uint16FromU32(symbol32)
+	if !ok {
+		return nodeInfo{}, fmt.Errorf("node symbol out of range: %d", symbol32)
+	}
+
+	return nodeInfo{
+		Symbol:     symbol,
+		StartByte:  int(binary.LittleEndian.Uint32(buf[4:8])),
+		EndByte:    int(binary.LittleEndian.Uint32(buf[8:12])),
+		ChildCount: binary.LittleEndian.Uint32(buf[12:16]),
+		Flags:      binary.LittleEndian.Uint32(buf[16:20]),
+	}, nil
 }
 
 func (p *Parser) allocNode(ctx context.Context) (uint64, error) {
@@ -657,14 +658,6 @@ func (p *Parser) freePtr(ptr uint64) {
 		return
 	}
 	_, _ = p.free.Call(context.Background(), ptr)
-}
-
-func (p *Parser) callBool(ctx context.Context, fn api.Function, args ...uint64) (bool, error) {
-	v, err := p.callU64(ctx, fn, args...)
-	if err != nil {
-		return false, err
-	}
-	return v != 0, nil
 }
 
 func (p *Parser) callU32(ctx context.Context, fn api.Function, args ...uint64) (uint32, error) {

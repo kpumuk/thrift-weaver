@@ -56,19 +56,9 @@ fi
   -Wl,--export=tw_tree_edit \
   -Wl,--export=tw_tree_changed_ranges \
   -Wl,--export=tw_tree_root_node \
-  -Wl,--export=tw_node_child_count \
-  -Wl,--export=tw_node_child \
-  -Wl,--export=tw_node_named_child_count \
-  -Wl,--export=tw_node_named_child \
-  -Wl,--export=tw_node_type \
-  -Wl,--export=tw_node_symbol \
-  -Wl,--export=tw_node_start_byte \
-  -Wl,--export=tw_node_end_byte \
-  -Wl,--export=tw_node_is_error \
-  -Wl,--export=tw_node_is_missing \
-  -Wl,--export=tw_node_is_named \
-  -Wl,--export=tw_node_is_extra \
-  -Wl,--export=tw_node_has_error
+  -Wl,--export=tw_node_inspect \
+  -Wl,--export=tw_node_children \
+  -Wl,--export=tw_node_type
 
 checksum="$(shasum -a 256 "$WASM_PATH" | awk '{print $1}')"
 printf '%s\n' "$checksum" > "$CHECKSUM_PATH"
