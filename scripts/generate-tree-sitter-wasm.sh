@@ -51,6 +51,11 @@ SOURCE_DATE_EPOCH=0 \
 "$WASI_CLANG" --target=wasm32-wasi -D__EMSCRIPTEN__ -mexec-model=reactor \
   -g0 \
   "-fdebug-prefix-map=$ROOT_DIR=." \
+  "-ffile-prefix-map=$ROOT_DIR=." \
+  "-fmacro-prefix-map=$ROOT_DIR=." \
+  "-fdebug-prefix-map=$TREE_SITTER_CORE_DIR=third_party/tree-sitter-core" \
+  "-ffile-prefix-map=$TREE_SITTER_CORE_DIR=third_party/tree-sitter-core" \
+  "-fmacro-prefix-map=$TREE_SITTER_CORE_DIR=third_party/tree-sitter-core" \
   -fdebug-compilation-dir=. \
   -I "$TREE_SITTER_CORE_DIR/include" \
   -I "$TREE_SITTER_CORE_DIR/src" \
