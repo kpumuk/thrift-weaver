@@ -20,7 +20,10 @@ mkdir -p "$ARTIFACT_DIR"
 if [[ ! -x "$WASI_CLANG" ]]; then
   echo "bootstrapping wasi clang via tree-sitter CLI..." >&2
   BOOTSTRAP_WASM="$(mktemp "${TMPDIR:-/tmp}/tree-sitter-bootstrap-XXXXXX.wasm")"
-  mise exec tree-sitter -- tree-sitter build --wasm --output "$BOOTSTRAP_WASM" >/dev/null
+  (
+    cd "$GRAMMAR_DIR"
+    mise exec tree-sitter -- tree-sitter build --wasm --output "$BOOTSTRAP_WASM" >/dev/null
+  )
   rm -f "$BOOTSTRAP_WASM"
 fi
 
