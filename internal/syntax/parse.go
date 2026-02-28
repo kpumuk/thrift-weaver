@@ -170,7 +170,7 @@ func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte,
 		)
 	}
 
-	out, err := buildSyntaxTreeFromRaw(ctx, src, opts, incrementalRaw)
+	out, err := buildSyntaxTreeFromRawIncremental(ctx, src, opts, incrementalRaw, old, changedSpans)
 	if err != nil {
 		incrementalRaw.Close()
 		return nil, err
@@ -271,7 +271,19 @@ func fallbackIncrementalReparse(
 
 func buildSyntaxTreeFromRaw(ctx context.Context, src []byte, opts ParseOptions, rawTree *ts.Tree) (*Tree, error) {
 	lexRes := lexer.Lex(src)
-	return buildSyntaxTreeFromRawWithLexResult(ctx, src, opts, rawTree, lexRes)
+	return buildSyntaxTreeFromRawWithLexResultAndReuse(ctx, src, opts, rawTree, lexRes, nil, nil)
+}
+
+func buildSyntaxTreeFromRawIncremental(
+	ctx context.Context,
+	src []byte,
+	opts ParseOptions,
+	rawTree *ts.Tree,
+	old *Tree,
+	changed []text.Span,
+) (*Tree, error) {
+	lexRes := lexer.Lex(src)
+	return buildSyntaxTreeFromRawWithLexResultAndReuse(ctx, src, opts, rawTree, lexRes, old, changed)
 }
 
 func buildDegradedTreeForParserFailure(src []byte, opts ParseOptions, parseErr error) *Tree {
@@ -296,6 +308,18 @@ func buildDegradedTreeForParserFailureWithLexResult(src []byte, opts ParseOption
 }
 
 func buildSyntaxTreeFromRawWithLexResult(ctx context.Context, src []byte, opts ParseOptions, rawTree *ts.Tree, lexRes lexer.Result) (*Tree, error) {
+	return buildSyntaxTreeFromRawWithLexResultAndReuse(ctx, src, opts, rawTree, lexRes, nil, nil)
+}
+
+func buildSyntaxTreeFromRawWithLexResultAndReuse(
+	ctx context.Context,
+	src []byte,
+	opts ParseOptions,
+	rawTree *ts.Tree,
+	lexRes lexer.Result,
+	old *Tree,
+	changed []text.Span,
+) (*Tree, error) {
 	if rawTree == nil {
 		return nil, errors.New("tree-sitter tree is nil")
 	}
@@ -328,6 +352,11 @@ func buildSyntaxTreeFromRawWithLexResult(ctx context.Context, src []byte, opts P
 		tokenIndex: newTokenSpanIndex(out.Tokens),
 		nodes:      &out.Nodes,
 		lineIndex:  out.LineIndex,
+		reusedByID: []bool{false},
+	}
+	if old != nil {
+		builder.oldNodes = old.Nodes
+		builder.changed = changed
 	}
 	out.Nodes = make([]Node, 1, 1+len(flatNodes))
 	out.Root = builder.buildFlatTree(flatNodes)
@@ -341,6 +370,9 @@ type cstBuilder struct {
 	tokenIndex  tokenSpanIndex
 	nodes       *[]Node
 	lineIndex   *text.LineIndex
+	oldNodes    []Node
+	changed     []text.Span
+	reusedByID  []bool
 	diagnostics []Diagnostic
 }
 
@@ -370,7 +402,7 @@ func (b *cstBuilder) buildFlatTree(flatNodes []ts.FlatNode) NodeID {
 		if flat.HasError {
 			flags |= NodeFlagRecovered
 		}
-		*b.nodes = append(*b.nodes, Node{
+		candidate := Node{
 			ID:         id,
 			Kind:       NodeKind(flat.KindID),
 			Span:       sp,
@@ -378,17 +410,21 @@ func (b *cstBuilder) buildFlatTree(flatNodes []ts.FlatNode) NodeID {
 			LastToken:  lastTok,
 			Parent:     parentID,
 			Flags:      flags,
-		})
+		}
+		reusedChildren, reused := b.reusedChildrenFor(candidate)
+		candidate.Children = reusedChildren
+		*b.nodes = append(*b.nodes, candidate)
+		b.reusedByID = append(b.reusedByID, reused)
 
 		includedByFlat[i] = true
 		idByFlat[i] = id
 		if parentID == NoNode {
 			rootID = id
-		} else {
+		} else if !b.isReusedNode(parentID) {
 			(*b.nodes)[parentID].Children = append((*b.nodes)[parentID].Children, ChildRef{IsToken: false, Index: uint32(id)})
 		}
 
-		if flat.ChildCount == 0 {
+		if flat.ChildCount == 0 && !reused {
 			if len(b.tokens) == 0 {
 				continue
 			}
@@ -406,6 +442,44 @@ func (b *cstBuilder) buildFlatTree(flatNodes []ts.FlatNode) NodeID {
 		}
 	}
 	return rootID
+}
+
+func (b *cstBuilder) isReusedNode(id NodeID) bool {
+	idx := int(id)
+	return idx >= 0 && idx < len(b.reusedByID) && b.reusedByID[idx]
+}
+
+func (b *cstBuilder) reusedChildrenFor(node Node) ([]ChildRef, bool) {
+	if len(b.oldNodes) == 0 || spanIntersectsAny(node.Span, b.changed) {
+		return nil, false
+	}
+	idx := int(node.ID)
+	if idx <= 0 || idx >= len(b.oldNodes) {
+		return nil, false
+	}
+	old := b.oldNodes[idx]
+	if old.ID != node.ID || old.Kind != node.Kind || old.Span != node.Span || old.Parent != node.Parent {
+		return nil, false
+	}
+	if old.FirstToken != node.FirstToken || old.LastToken != node.LastToken || old.Flags != node.Flags {
+		return nil, false
+	}
+	return old.Children, true
+}
+
+func spanIntersectsAny(span text.Span, ranges []text.Span) bool {
+	if !span.IsValid() || len(ranges) == 0 {
+		return false
+	}
+	if span.IsEmpty() {
+		for _, r := range ranges {
+			if r.Contains(span.Start) {
+				return true
+			}
+		}
+		return false
+	}
+	return slices.ContainsFunc(ranges, span.Intersects)
 }
 
 func (b *cstBuilder) parentFromFlat(flat ts.FlatNode, idx int, includedByFlat []bool, idByFlat []NodeID) (NodeID, bool) {
