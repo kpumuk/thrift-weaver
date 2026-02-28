@@ -48,6 +48,9 @@ func (s *SnapshotStore) Open(ctx context.Context, uri string, version int32, src
 	}
 	snap := &Snapshot{URI: uri, Version: version, Tree: tree}
 	s.mu.Lock()
+	if prev, ok := s.docs[uri]; ok && prev != nil && prev.Tree != nil {
+		prev.Tree.Close()
+	}
 	s.docs[uri] = snap
 	s.mu.Unlock()
 	return snap, nil
@@ -68,11 +71,16 @@ func (s *SnapshotStore) Change(ctx context.Context, uri string, version int32, c
 		return nil, ErrStaleVersion
 	}
 
-	nextSrc, err := applyContentChanges(cur.Tree.Source, changes)
+	nextSrc, incrementalEdits, incrementalEligible, err := applyContentChanges(cur.Tree.Source, changes)
 	if err != nil {
 		return nil, err
 	}
-	nextTree, err := syntax.Reparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: uri, Version: version})
+	var nextTree *syntax.Tree
+	if incrementalEligible {
+		nextTree, err = syntax.ApplyIncrementalEditsAndReparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: uri, Version: version}, incrementalEdits)
+	} else {
+		nextTree, err = syntax.Reparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: uri, Version: version})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +88,7 @@ func (s *SnapshotStore) Change(ctx context.Context, uri string, version int32, c
 	s.mu.Lock()
 	s.docs[uri] = next
 	s.mu.Unlock()
+	cur.Tree.Close()
 	return next, nil
 }
 
@@ -89,6 +98,9 @@ func (s *SnapshotStore) Close(uri string) {
 		return
 	}
 	s.mu.Lock()
+	if snap, ok := s.docs[uri]; ok && snap != nil && snap.Tree != nil {
+		snap.Tree.Close()
+	}
 	delete(s.docs, uri)
 	s.mu.Unlock()
 }
@@ -116,10 +128,76 @@ func (s *SnapshotStore) SnapshotAtVersion(uri string, version int32) (*Snapshot,
 	return snap, nil
 }
 
-func applyContentChanges(src []byte, changes []TextDocumentContentChangeEvent) ([]byte, error) {
+func applyContentChanges(src []byte, changes []TextDocumentContentChangeEvent) ([]byte, []syntax.InputEdit, bool, error) {
+	const (
+		maxIncrementalEdits      = 1024
+		maxIncrementalEditedByte = 256 * 1024
+	)
 	if len(changes) == 0 {
-		return slices.Clone(src), nil
+		return slices.Clone(src), nil, false, nil
 	}
+	if len(changes) > maxIncrementalEdits {
+		next, err := applyTextChanges(src, changes)
+		return next, nil, false, err
+	}
+
+	cur := slices.Clone(src)
+	edits := make([]syntax.InputEdit, 0, len(changes))
+	incrementalEligible := true
+	editedBytes := 0
+
+	for _, ch := range changes {
+		if ch.Range == nil {
+			cur = []byte(ch.Text)
+			incrementalEligible = false
+			continue
+		}
+		li := itext.NewLineIndex(cur)
+		start, end, err := utf16RangeToOffsets(li, *ch.Range)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
+		startPoint, err := li.OffsetToPoint(start)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("change start point: %w", err)
+		}
+		oldEndPoint, err := li.OffsetToPoint(end)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("change old-end point: %w", err)
+		}
+
+		next, applyErr := applySingleChange(cur, start, end, ch.Text)
+		if applyErr != nil {
+			return nil, nil, false, applyErr
+		}
+		newEndOffset := start + itext.ByteOffset(len(ch.Text))
+		newLI := itext.NewLineIndex(next)
+		newEndPoint, err := newLI.OffsetToPoint(newEndOffset)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("change new-end point: %w", err)
+		}
+		edits = append(edits, syntax.InputEdit{
+			StartByte:   start,
+			OldEndByte:  end,
+			NewEndByte:  newEndOffset,
+			StartPoint:  startPoint,
+			OldEndPoint: oldEndPoint,
+			NewEndPoint: newEndPoint,
+		})
+		editedBytes += int(end-start) + len(ch.Text)
+		if editedBytes > maxIncrementalEditedByte {
+			incrementalEligible = false
+		}
+		cur = next
+	}
+	if !incrementalEligible || len(edits) == 0 {
+		return cur, nil, false, nil
+	}
+	return cur, edits, true, nil
+}
+
+func applyTextChanges(src []byte, changes []TextDocumentContentChangeEvent) ([]byte, error) {
 	cur := slices.Clone(src)
 	for _, ch := range changes {
 		if ch.Range == nil {
@@ -127,24 +205,37 @@ func applyContentChanges(src []byte, changes []TextDocumentContentChangeEvent) (
 			continue
 		}
 		li := itext.NewLineIndex(cur)
-		start, err := li.UTF16PositionToOffset(itext.UTF16Position{Line: ch.Range.Start.Line, Character: ch.Range.Start.Character})
+		start, end, err := utf16RangeToOffsets(li, *ch.Range)
 		if err != nil {
-			return nil, fmt.Errorf("change range start: %w", err)
+			return nil, err
 		}
-		end, err := li.UTF16PositionToOffset(itext.UTF16Position{Line: ch.Range.End.Line, Character: ch.Range.End.Character})
-		if err != nil {
-			return nil, fmt.Errorf("change range end: %w", err)
-		}
-		if end < start {
-			return nil, errors.New("change range end before start")
-		}
-		cur, err = itext.ApplyEdits(cur, []itext.ByteEdit{{
-			Span:    itext.Span{Start: start, End: end},
-			NewText: []byte(ch.Text),
-		}})
+
+		cur, err = applySingleChange(cur, start, end, ch.Text)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return cur, nil
+}
+
+func applySingleChange(src []byte, start, end itext.ByteOffset, newText string) ([]byte, error) {
+	return itext.ApplyEdits(src, []itext.ByteEdit{{
+		Span:    itext.Span{Start: start, End: end},
+		NewText: []byte(newText),
+	}})
+}
+
+func utf16RangeToOffsets(li *itext.LineIndex, r Range) (itext.ByteOffset, itext.ByteOffset, error) {
+	start, err := li.UTF16PositionToOffset(itext.UTF16Position{Line: r.Start.Line, Character: r.Start.Character})
+	if err != nil {
+		return 0, 0, fmt.Errorf("change range start: %w", err)
+	}
+	end, err := li.UTF16PositionToOffset(itext.UTF16Position{Line: r.End.Line, Character: r.End.Character})
+	if err != nil {
+		return 0, 0, fmt.Errorf("change range end: %w", err)
+	}
+	if end < start {
+		return 0, 0, errors.New("change range end before start")
+	}
+	return start, end, nil
 }

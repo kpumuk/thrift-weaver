@@ -49,3 +49,11 @@ depends = ["vscode-compile", "vscode-test"]
 description = "Compile and install VS Code extension"
 depends = ["vscode-compile"]
 run = "npm --prefix editors/vscode run package && code --install-extension editors/vscode/thrift-weaver-vscode-0.0.1.vsix --force"
+
+[tasks.grammars]
+description = "Regenerate tree-sitter parser and wasm grammar artifacts"
+run = "scripts/generate-tree-sitter.sh && scripts/generate-tree-sitter-wasm.sh"
+
+[tasks.grammars-drift]
+description = "Validate parser and wasm grammar artifacts are up to date"
+run = "scripts/generate-tree-sitter.sh && scripts/generate-tree-sitter-wasm.sh && scripts/verify-tree-sitter-wasm.sh && git diff --exit-code -- grammar/tree-sitter-thrift/src internal/grammars/thrift/thrift.wasm internal/grammars/thrift/thrift.wasm.sha256"

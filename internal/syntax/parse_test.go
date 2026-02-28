@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
+	"github.com/kpumuk/thrift-weaver/internal/testutil"
 )
 
 func TestParseValidBuildsTreeAndQueries(t *testing.T) {
@@ -172,23 +175,141 @@ func TestParseIgnoresExtraCommentNodesForAlignment(t *testing.T) {
 	}
 }
 
-func TestReparseEquivalentToParse(t *testing.T) {
+func TestParseApacheParityConstructs(t *testing.T) {
 	t.Parallel()
 
-	src := []byte("enum E { A = 1, B = 2, }\n")
-	opts := ParseOptions{URI: "file:///eq.thrift", Version: 3}
+	src := []byte(`
+namespace xsd test (uri = 'http://thrift.apache.org/ns/Test')
+const i32 NEG = -1
+const double PI = -3.14e+1
+const list<i32> LIST_SEMI = [1; 2;]
+const map<string, i32> MAP_SEMI = {"a": 1; "b": 2;}
 
-	first, err := Parse(context.Background(), src, opts)
+typedef map cpp_type "std::map<std::string,std::string>" <string, string> Dict
+typedef set cpp_type "std::set<std::string>" <string> Keys
+typedef list cpp_type "std::vector<std::string>" <string> cpp_type "std::list<std::string>" LegacyList
+
+struct S xsd_all {
+  1: optional i32 reference namespace = -2 xsd_optional xsd_nillable xsd_attrs { 1: string include } (doc = "ok")
+}
+`)
+
+	tree, err := Parse(context.Background(), src, ParseOptions{})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	second, err := Reparse(context.Background(), first, src, opts)
-	if err != nil {
-		t.Fatalf("Reparse() error = %v", err)
+	if hasDiagnosticCode(tree.Diagnostics, DiagnosticParserErrorNode) || hasDiagnosticCode(tree.Diagnostics, DiagnosticParserMissingNode) {
+		t.Fatalf("unexpected parser diagnostics: %+v", tree.Diagnostics)
 	}
+	for _, kind := range []string{
+		"namespace_declaration",
+		"struct_definition",
+		"map_type",
+		"set_type",
+		"list_type",
+		"xsd_attrs",
+		"field_reference",
+	} {
+		if !treeHasKind(tree, kind) {
+			t.Fatalf("expected CST kind %q", kind)
+		}
+	}
+}
 
-	if !reflect.DeepEqual(treeSnapshot(first), treeSnapshot(second)) {
-		t.Fatalf("Parse/Reparse mismatch\nfirst=%#v\nsecond=%#v", treeSnapshot(first), treeSnapshot(second))
+func TestParseRejectsEqualsInConstMapEntry(t *testing.T) {
+	t.Parallel()
+
+	src := []byte(`const map<string, i32> BAD = {"x" = 1}`)
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !hasDiagnosticCode(tree.Diagnostics, DiagnosticParserErrorNode) {
+		t.Fatalf("expected parser error diagnostic for '=' map entry, got %+v", tree.Diagnostics)
+	}
+}
+
+func TestParseMisplacedHeaderFailOpen(t *testing.T) {
+	t.Parallel()
+
+	src := []byte("struct A {}\nnamespace go demo\n")
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !treeHasKind(tree, "misplaced_namespace_declaration") {
+		t.Fatalf("expected misplaced namespace node, got diagnostics=%+v", tree.Diagnostics)
+	}
+}
+
+func TestReparseEquivalentToParse(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string][]byte{
+		"valid":     []byte("enum E { A = 1, B = 2, }\n"),
+		"malformed": []byte("service Broken { void f(1: string name }\n"),
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := ParseOptions{
+				URI:     "file:///" + name + ".thrift",
+				Version: 3,
+			}
+
+			first, err := Parse(context.Background(), src, opts)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			second, err := Reparse(context.Background(), first, src, opts)
+			if err != nil {
+				t.Fatalf("Reparse() error = %v", err)
+			}
+
+			if !reflect.DeepEqual(treeSnapshot(first), treeSnapshot(second)) {
+				t.Fatalf("Parse/Reparse mismatch\nfirst=%#v\nsecond=%#v", treeSnapshot(first), treeSnapshot(second))
+			}
+		})
+	}
+}
+
+func TestParseCorpusFixtures(t *testing.T) {
+	t.Parallel()
+
+	for _, setName := range []string{"valid", "invalid", "editor"} {
+		t.Run(setName, func(t *testing.T) {
+			t.Parallel()
+
+			files, err := testutil.CorpusFiles(setName)
+			if err != nil {
+				t.Fatalf("CorpusFiles(%q): %v", setName, err)
+			}
+			for _, file := range files {
+				t.Run(filepath.Base(file), func(t *testing.T) {
+					assertParseFile(t, file)
+				})
+			}
+		})
+	}
+}
+
+func assertParseFile(t *testing.T, file string) {
+	t.Helper()
+
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", file, err)
+	}
+	tree, err := Parse(context.Background(), src, ParseOptions{
+		URI:     "file://" + file,
+		Version: 1,
+	})
+	if err != nil {
+		t.Fatalf("Parse(%q): %v", file, err)
+	}
+	if tree == nil || tree.Root == NoNode {
+		t.Fatalf("Parse(%q): missing root", file)
 	}
 }
 
@@ -266,6 +387,18 @@ func hasDiagnosticCode(diags []Diagnostic, code DiagnosticCode) bool {
 func hasDiagnosticSource(diags []Diagnostic, source string) bool {
 	for _, d := range diags {
 		if d.Source == source {
+			return true
+		}
+	}
+	return false
+}
+
+func treeHasKind(tree *Tree, want string) bool {
+	if tree == nil {
+		return false
+	}
+	for _, n := range tree.Nodes {
+		if KindName(n.Kind) == want {
 			return true
 		}
 	}

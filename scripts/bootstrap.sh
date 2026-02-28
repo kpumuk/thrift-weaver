@@ -10,6 +10,7 @@ set -euo pipefail
 # - pinned tools installed via mise
 # - git hooks installed (unless CODEX_NO_HOOKS=1)
 # - tree-sitter parser generated
+# - tree-sitter wasm grammar artifact generated
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -28,6 +29,6 @@ if [[ "${CODEX_NO_HOOKS:-0}" != "1" ]]; then
 fi
 
 "$ROOT_DIR/scripts/generate-tree-sitter.sh"
+"$ROOT_DIR/scripts/generate-tree-sitter-wasm.sh"
 
 echo "bootstrap: done"
-

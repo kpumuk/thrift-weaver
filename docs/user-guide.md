@@ -21,7 +21,7 @@ go install github.com/kpumuk/thrift-weaver/cmd/thriftls@latest
 
 Notes:
 - use a pinned version (`@vX.Y.Z`) instead of `@latest` for reproducible installs
-- this requires a working C toolchain because `thriftfmt` / `thriftls` use `tree-sitter` via `cgo`
+- binaries are pure Go (`CGO_ENABLED=0`) and do not require a local C toolchain
 
 ### Option 2: Build from source (recommended for contributors)
 
@@ -29,6 +29,7 @@ Notes:
 git clone https://github.com/kpumuk/thrift-weaver.git
 cd thrift-weaver
 mise install
+mise run grammars
 
 go build -o thriftfmt ./cmd/thriftfmt
 go build -o thriftls ./cmd/thriftls

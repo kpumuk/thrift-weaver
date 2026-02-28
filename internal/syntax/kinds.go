@@ -7,5 +7,5 @@ func kindName(kind NodeKind) string {
 	if lang == nil {
 		return ""
 	}
-	return lang.NodeKindForId(uint16(kind))
+	return lang.NodeKindForID(uint16(kind))
 }

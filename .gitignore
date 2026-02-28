@@ -1,5 +1,12 @@
+# Compiled binaries
 /thriftfmt
 /thriftls
 /dist/
 /.release-extra/
+
+# OS metadata
 .DS_Store
+
+# Adversarial spec files and virtual environment
+.adversarial/
+.venv-adversarial/

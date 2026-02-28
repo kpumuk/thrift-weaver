@@ -25,7 +25,7 @@ type formatHints struct {
 }
 
 func (h formatHints) topLevelBreakCount(tok uint32) int {
-	if breaks := h.topLevelBreaks[tok]; breaks > 0 {
+	if breaks, ok := h.topLevelBreaks[tok]; ok {
 		return breaks
 	}
 	return 2
@@ -518,6 +518,12 @@ func flatTokenText(tree *syntax.Tree, first, last uint32) (string, bool) {
 }
 
 func topLevelBreakCount(prevKind, currKind string) int {
+	// The wasm parse path currently surfaces namespace annotations as a trailing
+	// ERROR node starting at "(". Keep it attached to the namespace declaration
+	// to preserve stable formatting until grammar parity work lands.
+	if prevKind == "namespace_declaration" && currKind == "ERROR" {
+		return 0
+	}
 	if sameTopLevelDirectiveGroup(prevKind, currKind) {
 		return 1
 	}

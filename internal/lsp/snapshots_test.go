@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/kpumuk/thrift-weaver/internal/syntax"
 )
 
 func TestSnapshotStoreOpenChangeCloseLifecycle(t *testing.T) {
@@ -66,6 +68,34 @@ func TestSnapshotStoreChangeAllowsInvalidSyntaxAndKeepsDiagnostics(t *testing.T)
 	}
 	if len(snap.Tree.Diagnostics) == 0 {
 		t.Fatal("expected recoverable parser diagnostics for invalid syntax")
+	}
+}
+
+func TestSnapshotStoreChangeUsesIncrementalReparseForRangedEdits(t *testing.T) {
+	store := NewSnapshotStore()
+	uri := "file:///incremental.thrift"
+	if _, err := store.Open(context.Background(), uri, 1, []byte("struct S {\n  1: string name,\n}\n")); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	var observed syntax.ReparseEvent
+	restoreObserver := syntax.SetReparseObserverForTesting(func(ev syntax.ReparseEvent) {
+		observed = ev
+	})
+	defer restoreObserver()
+
+	_, err := store.Change(context.Background(), uri, 2, []TextDocumentContentChangeEvent{{
+		Range: &Range{
+			Start: Position{Line: 1, Character: 12},
+			End:   Position{Line: 1, Character: 16},
+		},
+		Text: "xname",
+	}})
+	if err != nil {
+		t.Fatalf("Change: %v", err)
+	}
+	if observed.Mode != "incremental" || !observed.ProvidedOldTree || observed.AppliedTreeEdits != 1 {
+		t.Fatalf("unexpected incremental event: %+v", observed)
 	}
 }
 

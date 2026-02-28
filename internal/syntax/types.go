@@ -108,14 +108,17 @@ type ParseOptions struct {
 
 // Tree is the immutable syntax parse result.
 type Tree struct {
-	URI         string
-	Version     int32
-	Source      []byte
-	Tokens      []lexer.Token
-	Nodes       []Node // index 0 is unused sentinel; real NodeIDs are 1-based
-	Root        NodeID
-	Diagnostics []Diagnostic
-	LineIndex   *text.LineIndex
+	URI           string
+	Version       int32
+	Source        []byte
+	Tokens        []lexer.Token
+	Nodes         []Node // index 0 is unused sentinel; real NodeIDs are 1-based
+	Root          NodeID
+	Diagnostics   []Diagnostic
+	LineIndex     *text.LineIndex
+	ChangedRanges []text.Span
+
+	runtime *parseRuntimeState
 }
 
 // NodeByID returns the node for id or nil if not present.

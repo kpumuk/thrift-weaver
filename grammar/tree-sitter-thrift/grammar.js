@@ -9,8 +9,20 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
+  inline: ($) => [
+    $.header,
+    $.definition,
+    $.misplaced_header,
+    $.definition_tail,
+    $.misplaced_section,
+  ],
+
   rules: {
-    source_file: ($) => repeat($._top_level_declaration),
+    source_file: ($) => seq(repeat($.header), optional($.definition_tail)),
+
+    definition_tail: ($) => seq(repeat1($.definition), optional($.misplaced_section)),
+
+    misplaced_section: ($) => seq(repeat1($.misplaced_header), repeat($.definition)),
 
     comment: () =>
       token(
@@ -21,11 +33,15 @@ module.exports = grammar({
         ),
       ),
 
-    _top_level_declaration: ($) =>
+    header: ($) =>
       choice(
         $.include_declaration,
         $.cpp_include_declaration,
         $.namespace_declaration,
+      ),
+
+    definition: ($) =>
+      choice(
         $.typedef_declaration,
         $.const_declaration,
         $.enum_definition,
@@ -36,20 +52,31 @@ module.exports = grammar({
         $.service_definition,
       ),
 
+    misplaced_header: ($) =>
+      choice(
+        alias($.include_declaration, $.misplaced_include_declaration),
+        alias($.cpp_include_declaration, $.misplaced_cpp_include_declaration),
+        alias($.namespace_declaration, $.misplaced_namespace_declaration),
+      ),
+
     include_declaration: ($) => seq('include', field('path', $.string_literal), optional($._statement_sep)),
 
     cpp_include_declaration: ($) => seq('cpp_include', field('path', $.string_literal), optional($._statement_sep)),
 
     namespace_declaration: ($) =>
-      seq(
-        'namespace',
-        field('scope', $.namespace_scope),
-        field('target', $.namespace_target),
-        optional($._statement_sep),
+      choice(
+        seq(
+          'namespace',
+          field('scope', $.namespace_named_scope),
+          field('target', $.namespace_target),
+          optional($.annotations),
+          optional($._statement_sep),
+        ),
+        seq('namespace', field('scope', '*'), field('target', $.namespace_target), optional($._statement_sep)),
       ),
 
-    namespace_scope: () => token(choice('*', /[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*/)),
-    namespace_target: () => token(choice('*', /[A-Za-z_][A-Za-z0-9_.-]*/)),
+    namespace_named_scope: () => token(/[A-Za-z_][A-Za-z0-9_.]*/),
+    namespace_target: () => token(/[A-Za-z_][A-Za-z0-9_.-]*/),
 
     typedef_declaration: ($) =>
       seq('typedef', field('type', $.type), field('name', $.identifier), optional($.annotations), optional($._statement_sep)),
@@ -97,8 +124,8 @@ module.exports = grammar({
 
     senum_value: ($) => seq(field('value', $.string_literal), optional($._statement_sep)),
 
-    struct_definition: ($) => seq('struct', field('name', $.identifier), field('body', $.field_block), optional($.annotations), optional($._statement_sep)),
-    union_definition: ($) => seq('union', field('name', $.identifier), field('body', $.field_block), optional($.annotations), optional($._statement_sep)),
+    struct_definition: ($) => seq('struct', field('name', $.identifier), optional('xsd_all'), field('body', $.field_block), optional($.annotations), optional($._statement_sep)),
+    union_definition: ($) => seq('union', field('name', $.identifier), optional('xsd_all'), field('body', $.field_block), optional($.annotations), optional($._statement_sep)),
     exception_definition: ($) => seq('exception', field('name', $.identifier), field('body', $.field_block), optional($.annotations), optional($._statement_sep)),
 
     field_block: ($) => seq('{', repeat($.field), '}'),
@@ -108,25 +135,58 @@ module.exports = grammar({
         optional(seq(field('id', $.field_id), ':')),
         optional(field('requiredness', $.requiredness)),
         field('type', $.type),
-        field('name', $.identifier),
-        repeat($.legacy_field_option),
+        optional(field('reference', $.field_reference)),
+        field('name', $.field_name),
         optional(seq('=', field('default', $.const_value))),
+        optional($.xsd_optional),
+        optional($.xsd_nillable),
+        optional($.xsd_attrs),
         optional($.annotations),
         optional($._statement_sep),
       ),
 
-    field_id: ($) => seq(optional(choice('+', '-')), $.int_literal),
+    field_id: ($) => $.int_literal,
 
     requiredness: () => choice('required', 'optional'),
-
-    legacy_field_option: ($) =>
+    field_reference: () => 'reference',
+    field_name: ($) => choice($.identifier, $.field_keyword_name),
+    field_keyword_name: () =>
       choice(
-        'xsd_optional',
-        'xsd_nillable',
-        'xsd_attrs',
-        'xsd_all',
-        seq('xsd_namespace', $.string_literal),
+        'namespace',
+        'cpp_include',
+        'include',
+        'void',
+        'bool',
+        'byte',
+        'i8',
+        'i16',
+        'i32',
+        'i64',
+        'double',
+        'string',
+        'binary',
+        'uuid',
+        'map',
+        'list',
+        'set',
+        'oneway',
+        'async',
+        'typedef',
+        'struct',
+        'union',
+        'exception',
+        'extends',
+        'throws',
+        'service',
+        'enum',
+        'const',
+        'required',
+        'optional',
       ),
+
+    xsd_optional: () => 'xsd_optional',
+    xsd_nillable: () => 'xsd_nillable',
+    xsd_attrs: ($) => seq('xsd_attrs', '{', repeat($.field), '}'),
 
     service_definition: ($) =>
       seq(
@@ -176,24 +236,36 @@ module.exports = grammar({
     map_type: ($) =>
       seq(
         'map',
+        optional(field('cpp_type_prefix', $.legacy_cpp_type)),
         '<',
         field('key', $.type),
         ',',
         field('value', $.type),
         '>',
-        optional($.legacy_cpp_type),
       ),
 
-    list_type: ($) => seq('list', '<', field('element', $.type), '>', optional($.legacy_cpp_type)),
-    set_type: ($) => seq('set', '<', field('element', $.type), '>', optional($.legacy_cpp_type)),
+    list_type: ($) =>
+      seq(
+        'list',
+        optional(field('cpp_type_prefix', $.legacy_cpp_type)),
+        '<',
+        field('element', $.type),
+        '>',
+        optional(field('cpp_type_suffix', $.legacy_cpp_type)),
+      ),
+    set_type: ($) => seq('set', optional(field('cpp_type_prefix', $.legacy_cpp_type)), '<', field('element', $.type), '>'),
 
     legacy_cpp_type: ($) => seq('cpp_type', $.string_literal),
 
-    annotations: ($) => prec.right(PREC.annotation, seq('(', commaSep1($.annotation), optional(','), ')')),
+    annotations: ($) => prec.right(PREC.annotation, seq('(', repeat($.annotation), ')')),
 
-    annotation: ($) => seq(field('name', $.identifier), optional(seq('=', field('value', $.annotation_value)))),
-    annotation_value: ($) =>
-      choice($.uuid_literal, $.string_literal, $.int_literal, $.float_literal, $.bool_literal, $.identifier),
+    annotation: ($) =>
+      seq(
+        field('name', $.identifier),
+        optional(seq('=', field('value', $.annotation_value))),
+        optional($._statement_sep),
+      ),
+    annotation_value: ($) => $.string_literal,
 
     const_value: ($) =>
       choice(
@@ -207,18 +279,20 @@ module.exports = grammar({
         $.scoped_identifier,
       ),
 
-    const_list: ($) => seq('[', commaSep($.const_value), optional(','), ']'),
-    const_map: ($) => seq('{', commaSep($.const_map_entry), optional(','), '}'),
-    const_map_entry: ($) => seq(field('key', $.const_value), choice(':', '='), field('value', $.const_value)),
+    const_list: ($) =>
+      seq('[', optional(seq($.const_value, repeat(seq($._list_sep, $.const_value)), optional($._list_sep))), ']'),
+    const_map: ($) =>
+      seq('{', optional(seq($.const_map_entry, repeat(seq($._list_sep, $.const_map_entry)), optional($._list_sep))), '}'),
+    const_map_entry: ($) => seq(field('key', $.const_value), ':', field('value', $.const_value)),
 
     bool_literal: () => choice('true', 'false'),
-    int_literal: () => token(choice(/0[xX][0-9A-Fa-f]+/, /[0-9]+/)),
+    int_literal: () => token(choice(/[+-]?0[xX][0-9A-Fa-f]+/, /[+-]?[0-9]+/)),
     float_literal: () =>
       token(
         choice(
-          /[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?/,
-          /[0-9]+[eE][+-]?[0-9]+/,
-          /\.[0-9]+([eE][+-]?[0-9]+)?/,
+          /[+-]?[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?/,
+          /[+-]?[0-9]+[eE][+-]?[0-9]+/,
+          /[+-]?\.[0-9]+([eE][+-]?[0-9]+)?/,
         ),
       ),
 
@@ -242,14 +316,7 @@ module.exports = grammar({
     identifier: () => /[A-Za-z_][A-Za-z0-9_]*/,
     scoped_identifier: ($) => seq($.identifier, repeat(seq('.', $.identifier))),
 
+    _list_sep: () => choice(',', ';'),
     _statement_sep: () => choice(',', ';'),
   },
 });
-
-function commaSep(rule) {
-  return optional(commaSep1(rule));
-}
-
-function commaSep1(rule) {
-  return seq(rule, repeat(seq(',', rule)));
-}
