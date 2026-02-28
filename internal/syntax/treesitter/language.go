@@ -3,7 +3,7 @@ package treesitter
 
 import "sync"
 
-// NodeKindRegistry is a minimal node-kind registry used in no-cgo builds.
+// NodeKindRegistry is a minimal node-kind registry populated from wasm nodes.
 type NodeKindRegistry struct{}
 
 var (

@@ -2,7 +2,7 @@ package treesitter
 
 import "github.com/kpumuk/thrift-weaver/internal/text"
 
-// RawNode is a parsed syntax node produced by the no-cgo parser backend.
+// RawNode is a parsed syntax node produced by the in-process wasm parser backend.
 type RawNode struct {
 	Kind      string
 	KindID    uint16
@@ -55,11 +55,15 @@ func (n Node) KindID() uint16 {
 	return n.inner.KindID
 }
 
-// Span returns the node byte span when available.
-//
-// The no-cgo path does not materialize byte spans at this wrapper layer.
+// Span returns the node byte span.
 func (n Node) Span() text.Span {
-	return text.Span{}
+	if n.inner == nil {
+		return text.Span{}
+	}
+	return text.Span{
+		Start: text.ByteOffset(n.inner.StartByte),
+		End:   text.ByteOffset(n.inner.EndByte),
+	}
 }
 
 // HasError reports whether the node subtree contains parse errors.

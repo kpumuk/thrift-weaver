@@ -50,8 +50,6 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
-    container:
-      image: ghcr.io/goreleaser/goreleaser-cross:v1.26.0
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -60,6 +58,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+
+      - name: Install pinned tools
+        run: mise install
+
       - name: Download VSIX artifact
         uses: actions/download-artifact@v7
         with:
@@ -67,18 +71,10 @@ jobs:
           path: .release-extra
 
       - name: Run GoReleaser (draft)
-        run: |
-          repo_dir="/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
-          git config --global --add safe.directory "$repo_dir"
-          cd "$repo_dir"
-          git rev-parse --show-toplevel
-          goreleaser release --clean --draft
+        run: mise exec goreleaser -- goreleaser release --clean --draft
 
       - name: Generate thriftls managed-install manifest
         run: |
-          repo_dir="/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
-          git config --global --add safe.directory "$repo_dir"
-          cd "$repo_dir"
           go run ./scripts/generate-release-manifest \
             --version "${GITHUB_REF_NAME#v}" \
             --repo "${GITHUB_REPOSITORY}" \
@@ -89,9 +85,6 @@ jobs:
 
       - name: Generate VS Code release metadata
         run: |
-          repo_dir="/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}"
-          git config --global --add safe.directory "$repo_dir"
-          cd "$repo_dir"
           vsix_path="$(ls .release-extra/*.vsix | head -n1)"
           go run ./scripts/generate-vscode-release-metadata \
             --vsix "$vsix_path" \

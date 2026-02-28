@@ -65,7 +65,7 @@ var requiredWASMExports = []string{
 	"tw_node_has_error",
 }
 
-// Parser wraps a no-cgo parser backed by in-process tree-sitter wasm runtime.
+// Parser wraps an in-process tree-sitter parser backed by a wasm runtime.
 type Parser struct {
 	module api.Module
 

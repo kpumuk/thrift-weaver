@@ -47,7 +47,6 @@ Open the Command Palette and select "Extensions: Install from VSIX...", then ope
 ### Needs
 
 - Go (pinned in [`mise.toml`](mise.toml)).
-- A C toolchain (`tree-sitter` uses `cgo`).
 - Node.js and npm (for the VS Code extension).
 
 ### Setup From Source (recommended)
@@ -157,9 +156,6 @@ Managed install is on by default. If it fails and `thrift.server.path` is set, t
 - Formatter defaults: line width `100`, indent `2` spaces, max blank lines `2`.
 - Mixed newline files are normalized to the main style (`LF` or `CRLF`) with an info message.
 - Invalid UTF-8 input is refused for formatting.
-
-> [!CAUTION]
-> `tree-sitter` uses `cgo`. Build and `go install` need a working C toolchain on your system.
 
 ## Contributing
 

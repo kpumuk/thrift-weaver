@@ -1,5 +1,3 @@
-//go:build !cgo || !thriftweaver_cgo
-
 package syntax
 
 import "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
