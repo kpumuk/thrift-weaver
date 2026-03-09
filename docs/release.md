@@ -5,11 +5,13 @@ This project currently publishes **unsigned beta artifacts** with mandatory SHA-
 ## Published artifacts
 
 - `thriftfmt` archives (per platform)
+- `thriftlint` archives (per platform)
 - `thriftls` archives (per platform)
 - `checksums.txt` (SHA-256 for all release artifacts)
 - `thriftls-manifest.json` (managed-install manifest for the VS Code extension)
 - `thrift-weaver-vscode-<version>.vsix`
 - `vscode-release-metadata.json` (extension compatibility metadata)
+- `sbom.cdx.json` (CycloneDX SBOM for the release)
 - VS Code extension publication to:
   - Visual Studio Marketplace
   - Open VSX Registry
@@ -19,10 +21,13 @@ This project currently publishes **unsigned beta artifacts** with mandatory SHA-
 
 - Artifacts are published over GitHub Releases (HTTPS).
 - `thriftls` managed-install clients must verify SHA-256 checksums against `checksums.txt` / manifest entries.
-- GitHub Actions release workflow emits artifact attestations for release archives, checksums, `.vsix`, and generated metadata/manifest files.
+- GitHub Actions release workflow verifies release checksums before publishing the draft release.
+- GitHub Actions release workflow generates a CycloneDX SBOM for the release payload.
+- GitHub Actions release workflow emits artifact attestations for release archives, checksums, `.vsix`, generated metadata/manifest files, and the SBOM.
 - The VS Code extension release metadata includes the `.vsix` checksum and the referenced `thriftls` manifest schema version.
 - Platform code signing / notarization is **not yet required** for beta. This remains an explicit temporary policy tracked in the RFC and execution plan.
 - Linux managed-binary compatibility policy is documented in `docs/linux-managed-binary-compatibility.md`.
+- Release artifacts are pure-Go (`CGO_ENABLED=0`) binaries with the parser wasm embedded in the executable.
 
 ## Manual verification
 
@@ -44,10 +49,17 @@ Verify GitHub attestation (example with GitHub CLI):
 gh attestation verify thriftls_0.1.0_darwin_arm64.tar.gz --repo kpumuk/thrift-weaver
 ```
 
+Generate a local SBOM from the current module graph:
+
+```bash
+mise run generate-sbom
+```
+
 ## Notes
 
 - Windows `arm64` binary publication is best-effort.
 - The release workflow runs GoReleaser on a standard Ubuntu runner and packages pure-Go (`CGO_ENABLED=0`) binaries.
+- The release workflow verifies generated checksums and emits `dist/sbom.cdx.json` before uploading release metadata.
 - Beta release notes should include the Linux compatibility snippet/policy callout from `docs/linux-managed-binary-compatibility.md`.
 - Beta release notes should include a performance summary (parse/format p50/p95 + LSP memory loop) generated per `docs/performance.md`.
 

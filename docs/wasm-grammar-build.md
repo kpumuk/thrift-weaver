@@ -7,7 +7,7 @@ This document defines the reproducible grammar artifact pipeline for wasm parser
 Toolchain versions are pinned in [mise.toml](/Users/dmytro/work/github/thrift-weaver/mise.toml):
 
 - `tree-sitter = 0.26.5`
-- `golang = 1.26.0`
+- `golang = 1.26.1`
 - `node = 22.14.0`
 
 `tree-sitter build --wasm` downloads a pinned `wasi-sdk` toolchain on first run (currently `wasi-sdk-29` under `~/.cache/tree-sitter`).
@@ -36,6 +36,8 @@ The wasm output filename is fixed (`thrift.wasm`) to keep byte output determinis
 
 `thriftls` embeds `thrift.wasm` and `thrift.wasm.sha256` into the binary via `go:embed` from [embed.go](/Users/dmytro/work/github/thrift-weaver/internal/grammars/thrift/embed.go).
 
+This is the only supported runtime packaging path. The server does not load the grammar from the filesystem at runtime and does not shell out to `tree-sitter`.
+
 ## Verify Drift and Checksums
 
 Local drift verification:
@@ -54,3 +56,7 @@ CI enforces both drift checks in `.github/workflows/ci.yml`:
 - `wasm-grammar-drift` checks wasm artifact + checksum:
   - `internal/grammars/thrift/thrift.wasm`
   - `internal/grammars/thrift/thrift.wasm.sha256`
+
+## Related Runtime Docs
+
+- [WASM Runtime and Troubleshooting](/Users/dmytro/work/github/thrift-weaver/docs/wasm-runtime.md)

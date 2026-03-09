@@ -20,6 +20,8 @@ It has three parts:
 
 It is made for daily editor use. It keeps comments. It stays stable. It can handle broken or half-written files while you type.
 
+All three binaries are pure Go (`CGO_ENABLED=0`) and embed the Thrift parser wasm artifact. No external `.wasm` file is required at runtime.
+
 > [!IMPORTANT]
 > Read [RFC 0001](docs/rfcs/0001-thrift-tooling-platform.md) before code changes. If behavior or policy changes, update the RFC in the same PR.
 
@@ -141,11 +143,28 @@ Current features:
 
 - Live text sync.
 - Errors as you type.
+- Full-file lint diagnostics on open/save and debounced full-file lint on change.
 - Document formatting and range formatting.
 - Document symbols.
 - Folding ranges.
 - Selection ranges.
 - Semantic tokens (`textDocument/semanticTokens/full`).
+
+Current built-in lint rules:
+
+- explicit field IDs required
+- deprecated field `xsd_optional`
+- deprecated field `xsd_nillable`
+- deprecated field `xsd_attrs`
+- deprecated struct/exception `xsd_all`
+- `required` fields inside `union`
+- negative explicit enum values
+
+Runtime notes:
+
+- `didChange` uses incremental reparsing when edit eligibility checks pass; otherwise it falls back to a full reparse for that version.
+- Lint on change is currently full-file only. Changed-range lint is experimental and not enabled in the normative path.
+- There is no parser backend toggle. The supported runtime path is the embedded wasm parser.
 
 ## VS Code Extension
 
@@ -212,6 +231,7 @@ If you change behavior or policy, update [RFC 0001](docs/rfcs/0001-thrift-toolin
 - [User Guide](docs/user-guide.md)
 - [Architecture Overview](docs/architecture.md)
 - [WASM Grammar Build Pipeline](docs/wasm-grammar-build.md)
+- [WASM Runtime and Troubleshooting](docs/wasm-runtime.md)
 - [Performance Benchmarks](docs/performance.md)
 - [Robustness (fuzzing and race tests)](docs/robustness.md)
 - [Release Process](docs/release.md)

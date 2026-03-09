@@ -337,7 +337,7 @@ Key responsibilities:
 - diagnostics publishing
 - formatting handlers
 - symbols/folds/selection ranges
-- semantic tokens (phase 2)
+- semantic tokens
 - cancellation and version consistency
 - structured logging/trace hooks for debugging and support
 
@@ -352,7 +352,7 @@ v1 concurrency model:
 Purpose:
 
 - VS Code client and packaging
-- Syntax highlighting (TextMate in v1; semantic tokens later)
+- Syntax highlighting (TextMate baseline plus semantic-token overlay from `thriftls`)
 - Launch managed-install or user-provided `thriftls`
 
 Key responsibilities:
@@ -822,11 +822,11 @@ Implementation note:
 - `textDocument/documentSymbol`
 - `textDocument/foldingRange`
 - `textDocument/selectionRange`
+- `textDocument/semanticTokens/full`
 - `workspace/didChangeConfiguration` (configuration reload only; no complex workspace features)
 
 ### v2
 
-- `textDocument/semanticTokens/full`
 - `textDocument/onTypeFormatting` (optional)
 - richer diagnostics and quick fixes (e.g., deprecated syntax hints)
 
@@ -896,8 +896,8 @@ Tradeoffs:
 
 ### Semantic Highlighting Strategy
 
-- v1: TextMate only (reliable and simple)
-- v2: semantic tokens via LSP (overlay/fallback)
+- v1: TextMate baseline plus `textDocument/semanticTokens/full` from `thriftls`
+- v2: expand semantic-token quality/coverage as needed; keep TextMate as fallback
 
 ## CLI Design (`thriftfmt`)
 
@@ -1173,7 +1173,6 @@ Acceptance criteria:
 Scope:
 
 - performance tuning
-- semantic tokens (optional)
 - crash hardening and release automation
 
 Acceptance criteria:

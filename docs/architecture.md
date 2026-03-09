@@ -34,7 +34,7 @@ flowchart LR
 
   subgraph Grammar["Parser grammar (grammar/tree-sitter-thrift)"]
     TSJS["grammar.js"]
-    TSC["generated parser.c + queries"]
+    TSC["generated parser.c + wasm + queries"]
   end
 
   CLI --> FMT
@@ -65,6 +65,7 @@ Core implementation areas:
   - CST-ish tree model and queries
   - parser/lexer alignment diagnostics
   - tree-sitter wrappers in `internal/syntax/treesitter`
+  - embedded wasm runtime execution via `wazero`
 - `internal/format`
   - formatting policies and errors (`ErrUnsafeToFormat`)
   - doc/printer primitives
@@ -87,6 +88,7 @@ Parser grammar and query capture definitions:
 
 - `grammar/tree-sitter-thrift/grammar.js`
 - `grammar/tree-sitter-thrift/src/` (generated parser)
+- `internal/grammars/thrift/` (embedded wasm artifact + checksum)
 - `grammar/tree-sitter-thrift/queries/*.scm` (highlights, folds, symbols)
 
 Editor integration:
@@ -134,6 +136,7 @@ flowchart TD
 Notes:
 
 - `internal/syntax` aligns tree-sitter nodes to lexer tokens and emits internal alignment diagnostics when they disagree.
+- the shipped parser runtime is the embedded wasm artifact executed in-process via `wazero`
 - `internal/format` fails closed for unsafe cases and preserves comments via lexer trivia.
 - Range formatting widens to a safe ancestor before generating edits.
 
