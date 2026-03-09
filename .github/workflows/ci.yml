@@ -57,6 +57,8 @@ jobs:
   race-lsp:
     name: race-lsp
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
