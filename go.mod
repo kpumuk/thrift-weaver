@@ -1,6 +1,6 @@
 module github.com/kpumuk/thrift-weaver
 
-go 1.26.0
+go 1.26.1
 
 require (
 	github.com/tetratelabs/wazero v1.11.0

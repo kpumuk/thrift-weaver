@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
@@ -24,6 +25,9 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	got := res.Capabilities
 	if !got.TextDocumentSync.OpenClose || got.TextDocumentSync.Change != TextDocumentSyncKindIncremental {
 		t.Fatalf("unexpected textDocumentSync: %+v", got.TextDocumentSync)
+	}
+	if got.TextDocumentSync.Save == nil || got.TextDocumentSync.Save.IncludeText {
+		t.Fatalf("unexpected didSave sync options: %+v", got.TextDocumentSync.Save)
 	}
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
 		t.Fatalf("unexpected capabilities: %+v", got)
@@ -118,7 +122,7 @@ func TestServerRunPublishesDiagnosticsOnOpenChangeClose(t *testing.T) {
 	}
 
 	msgs := readAllFrames(t, out.Bytes())
-	notifications := collectMethodMessages(t, msgs, "textDocument/publishDiagnostics")
+	notifications := collectPublishDiagnosticsMessages(t, msgs)
 	if len(notifications) != 3 {
 		t.Fatalf("publishDiagnostics count=%d, want 3", len(notifications))
 	}
@@ -148,6 +152,202 @@ func TestServerRunPublishesDiagnosticsOnOpenChangeClose(t *testing.T) {
 	}
 	if len(closeDiag.Diagnostics) != 0 {
 		t.Fatalf("expected empty diagnostics on close, got %d", len(closeDiag.Diagnostics))
+	}
+}
+
+func TestServerRunPublishesLintDiagnosticsOnOpenChangeSave(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{
+				URI:     "file:///lint.thrift",
+				Version: 1,
+				Text:    "struct S {\n  string name,\n}\n",
+			},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///lint.thrift", Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct S {\n  1: string name xsd_optional,\n}\n",
+			}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didSave",
+		Params: mustJSON(t, DidSaveParams{
+			TextDocument: TextDocumentIdentifier{URI: "file:///lint.thrift"},
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+	notifications := collectPublishDiagnosticsMessages(t, msgs)
+	if len(notifications) != 3 {
+		t.Fatalf("publishDiagnostics count=%d, want 3", len(notifications))
+	}
+
+	var openDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[0].Params, &openDiag)
+	if openDiag.Version == nil || *openDiag.Version != 1 {
+		t.Fatalf("open diagnostics version=%v, want 1", openDiag.Version)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_FIELD_ID_REQUIRED") {
+		t.Fatalf("expected LINT_FIELD_ID_REQUIRED in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+
+	var changeDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[1].Params, &changeDiag)
+	if changeDiag.Version == nil || *changeDiag.Version != 2 {
+		t.Fatalf("change diagnostics version=%v, want 2", changeDiag.Version)
+	}
+	if len(changeDiag.Diagnostics) != 0 {
+		t.Fatalf("didChange should publish syntax-only diagnostics before debounce, got %+v", changeDiag.Diagnostics)
+	}
+
+	var saveDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[2].Params, &saveDiag)
+	if saveDiag.Version == nil || *saveDiag.Version != 2 {
+		t.Fatalf("save diagnostics version=%v, want 2", saveDiag.Version)
+	}
+	if !containsDiagnosticCode(saveDiag.Diagnostics, "LINT_DEPRECATED_FIELD_XSD_OPTIONAL") {
+		t.Fatalf("didSave diagnostics missing LINT_DEPRECATED_FIELD_XSD_OPTIONAL: %+v", saveDiag.Diagnostics)
+	}
+}
+
+func TestServerRunPublishesDebouncedLintDiagnosticsAfterDidChange(t *testing.T) {
+	t.Parallel()
+
+	s := NewServer()
+	s.setLintDebounceForTesting(10 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{
+				URI:     "file:///debounced.thrift",
+				Version: 1,
+				Text:    "struct S {\n  1: string name,\n}\n",
+			},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///debounced.thrift", Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct S {\n  1: string name xsd_optional,\n}\n",
+			}},
+		}),
+	})
+
+	time.Sleep(60 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	notifications := collectPublishDiagnosticsMessages(t, readAllFrames(t, out.Bytes()))
+	if len(notifications) != 3 {
+		t.Fatalf("publishDiagnostics count=%d, want 3", len(notifications))
+	}
+
+	var changeDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[1].Params, &changeDiag)
+	if changeDiag.Version == nil || *changeDiag.Version != 2 {
+		t.Fatalf("change diagnostics version=%v, want 2", changeDiag.Version)
+	}
+	if len(changeDiag.Diagnostics) != 0 {
+		t.Fatalf("didChange should publish syntax-only diagnostics before debounce, got %+v", changeDiag.Diagnostics)
+	}
+
+	var lintDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[2].Params, &lintDiag)
+	if lintDiag.Version == nil || *lintDiag.Version != 2 {
+		t.Fatalf("lint diagnostics version=%v, want 2", lintDiag.Version)
+	}
+	if !containsDiagnosticCode(lintDiag.Diagnostics, "LINT_DEPRECATED_FIELD_XSD_OPTIONAL") {
+		t.Fatalf("debounced lint diagnostics missing LINT_DEPRECATED_FIELD_XSD_OPTIONAL: %+v", lintDiag.Diagnostics)
+	}
+}
+
+func TestServerRunSuppressesStaleDebouncedLintDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	s := NewServer()
+	s.setLintDebounceForTesting(40 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{
+				URI:     "file:///stale.thrift",
+				Version: 1,
+				Text:    "struct S {\n  1: string name,\n}\n",
+			},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///stale.thrift", Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct S {\n  1: string name xsd_optional,\n}\n",
+			}},
+		}),
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///stale.thrift", Version: 3},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct S {\n  1: string name,\n}\n",
+			}},
+		}),
+	})
+
+	time.Sleep(100 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	notifications := collectPublishDiagnosticsMessages(t, readAllFrames(t, out.Bytes()))
+	if len(notifications) != 4 {
+		t.Fatalf("publishDiagnostics count=%d, want 4", len(notifications))
+	}
+
+	for i, msg := range notifications {
+		var diag PublishDiagnosticsParams
+		marshalRoundtrip(t, msg.Params, &diag)
+		if diag.Version != nil && *diag.Version == 2 && containsDiagnosticCode(diag.Diagnostics, "LINT_DEPRECATED_FIELD_XSD_OPTIONAL") {
+			t.Fatalf("notification %d published stale v2 lint diagnostics: %+v", i, diag.Diagnostics)
+		}
+	}
+
+	var finalDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[len(notifications)-1].Params, &finalDiag)
+	if finalDiag.Version == nil || *finalDiag.Version != 3 {
+		t.Fatalf("final diagnostics version=%v, want 3", finalDiag.Version)
+	}
+	if len(finalDiag.Diagnostics) != 0 {
+		t.Fatalf("expected v3 debounced lint to clear diagnostics, got %+v", finalDiag.Diagnostics)
 	}
 }
 
@@ -541,7 +741,7 @@ service Demo {
 	}
 }
 
-func writeReqFrame(t *testing.T, w *bytes.Buffer, req Request) {
+func writeReqFrame(t *testing.T, w io.Writer, req Request) {
 	t.Helper()
 	b, err := json.Marshal(req)
 	if err != nil {
@@ -549,6 +749,34 @@ func writeReqFrame(t *testing.T, w *bytes.Buffer, req Request) {
 	}
 	if err := writeFramedMessage(w, b); err != nil {
 		t.Fatalf("writeFramedMessage: %v", err)
+	}
+}
+
+func runServerAsync(t *testing.T, s *Server) (*io.PipeWriter, *bytes.Buffer, <-chan error) {
+	t.Helper()
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() {
+		_ = pr.Close()
+	})
+
+	out := new(bytes.Buffer)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(context.Background(), pr, out)
+	}()
+
+	return pw, out, errCh
+}
+
+func stopServerAsync(t *testing.T, pw *io.PipeWriter, errCh <-chan error) {
+	t.Helper()
+
+	if err := pw.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }
 
@@ -617,11 +845,11 @@ func readAllFrames(t *testing.T, raw []byte) []testFrame {
 	return out
 }
 
-func collectMethodMessages(t *testing.T, msgs []testFrame, method string) []Request {
+func collectPublishDiagnosticsMessages(t *testing.T, msgs []testFrame) []Request {
 	t.Helper()
 	out := make([]Request, 0, len(msgs))
 	for _, msg := range msgs {
-		if msg.msg.Method == method {
+		if msg.msg.Method == "textDocument/publishDiagnostics" {
 			out = append(out, msg.msg)
 		}
 	}
@@ -656,6 +884,15 @@ func findDocumentSymbol(in []DocumentSymbol, name string) *DocumentSymbol {
 func hasFoldingRangeStartingAtLine(in []FoldingRange, line int) bool {
 	for _, fr := range in {
 		if fr.StartLine == line && fr.EndLine > fr.StartLine {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDiagnosticCode(in []Diagnostic, code string) bool {
+	for _, d := range in {
+		if d.Code == code {
 			return true
 		}
 	}

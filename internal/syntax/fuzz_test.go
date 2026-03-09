@@ -21,6 +21,7 @@ func FuzzParse(f *testing.F) {
 		if err != nil {
 			t.Fatalf("Parse error: %v", err)
 		}
+		defer tree.Close()
 		if tree == nil {
 			t.Fatal("nil tree")
 		}

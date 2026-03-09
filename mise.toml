@@ -1,5 +1,5 @@
 [tools]
-golang = "1.26.0"
+golang = "1.26.1"
 node = "22.14.0"
 tree-sitter = "0.26.5"
 golangci-lint = "2.10.1"

@@ -22,6 +22,7 @@ func FuzzDocumentAndRange(f *testing.F) {
 		if err != nil {
 			t.Fatalf("Parse error: %v", err)
 		}
+		defer tree.Close()
 
 		_, err = Document(context.Background(), tree, Options{})
 		if err != nil && !IsErrUnsafeToFormat(err) {

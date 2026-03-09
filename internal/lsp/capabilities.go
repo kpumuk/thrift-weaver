@@ -6,6 +6,7 @@ func DefaultServerCapabilities() ServerCapabilities {
 		TextDocumentSync: TextDocumentSyncOptions{
 			OpenClose: true,
 			Change:    TextDocumentSyncKindIncremental,
+			Save:      &SaveOptions{IncludeText: false},
 		},
 		DocumentFormattingProvider:      true,
 		DocumentRangeFormattingProvider: true,
