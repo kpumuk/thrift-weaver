@@ -89,7 +89,7 @@ The platform is a shared engine with two frontends (CLI + LSP), plus a VS Code c
 ### 1. Language and Runtime
 
 - Implementation language: Go
-- Go `tree-sitter` binding/runtime: `github.com/tree-sitter/go-tree-sitter` (version pinned in M0)
+- Parser runtime: embedded tree-sitter wasm executed in-process via `wazero`
 - Rationale:
   - rapid iteration and testing
   - straightforward CLI/LSP packaging
@@ -773,15 +773,15 @@ The `tree-sitter` grammar must support:
 - `folds.scm` for folding ranges
 - `symbols.scm` for declarations (services, structs, enums, typedefs, consts)
 
-### cgo / Build Strategy
+### WASM Build Strategy
 
 `tree-sitter` integration introduces C code.
 
 Plan:
 
 - vendor/generated parser C sources in repo
-- build Go bindings with `cgo` using `github.com/tree-sitter/go-tree-sitter`
-- produce statically linked or self-contained binaries where feasible
+- vendor the tree-sitter core C runtime sources used for wasm artifact generation
+- build embedded parser wasm artifacts and ship pure-Go (`CGO_ENABLED=0`) binaries
 - test builds on macOS/Linux/Windows in CI before extension packaging work starts
 
 Risk mitigation:
@@ -791,8 +791,8 @@ Risk mitigation:
 
 Windows ARM64 note:
 
-- Building `windows/arm64` is straightforward for pure Go, but not automatically trivial here because `tree-sitter` integration uses `cgo` and requires a working C toolchain for cross/native builds.
-- v1 plan: include `windows/arm64` as a target if CI/toolchain setup is proven in M0/M1; otherwise defer artifact publication while keeping code portable.
+- Building `windows/arm64` is straightforward for the shipped binaries because runtime execution is pure Go and does not require `cgo`.
+- Grammar wasm generation still needs the pinned wasm toolchain in development/CI, but not in end-user environments.
 
 ### Parser/Lexer Alignment Invariants (Must-Have)
 
@@ -1187,8 +1187,8 @@ Acceptance criteria:
 1. Project hosting and governance:
    - Resolved for v1: start in `github.com/kpumuk/thrift-weaver` and evaluate upstreaming later.
 2. `tree-sitter` distribution policy:
-   - Resolved for v1: `cgo`-based binaries are acceptable; no non-`cgo` fallback is required from day one.
-   - Follow-up: confirm Windows `arm64` artifact support based on toolchain/CI readiness.
+   - Superseded by RFC 0002: ship embedded wasm parser artifacts and pure-Go (`CGO_ENABLED=0`) binaries; no cgo parser backend remains.
+   - Follow-up: keep wasm artifact drift and runtime ABI checks green in CI.
 3. Formatter v1 style strictness:
    - Resolved for v1: preserve separator lexemes and deprecated spellings by default; canonicalize whitespace/indentation only.
 4. Library API stability:
@@ -1209,10 +1209,10 @@ No M0-blocking open questions remain.
 These are narrower than the open questions above and directly block scaffolding work:
 
 1. Resolved: repository home/module path starts at `github.com/kpumuk/thrift-weaver`
-2. Resolved: use `github.com/tree-sitter/go-tree-sitter`; pin exact versions in M0
+2. Superseded by RFC 0002: use embedded tree-sitter wasm with `wazero`; keep tree-sitter core/runtime sources vendored for wasm generation
 3. Resolved: use RFC v1 default style profile and preserve separators/deprecated spellings
 4. Resolved: LSP invalid-format behavior defaults to fail-closed
-5. Resolved: Windows `arm64` artifact publication is best-effort in v1 and non-blocking for beta (depends on `cgo` toolchain/CI readiness)
+5. Resolved: Windows `arm64` artifact publication is supported in the pure-Go release matrix
 
 ## Alternatives Considered
 

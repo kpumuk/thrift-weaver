@@ -25,6 +25,8 @@ This executes:
 1. `scripts/generate-tree-sitter.sh` (parser C sources)
 2. `scripts/generate-tree-sitter-wasm.sh` (wasm artifact + checksum)
 
+The wasm build compiles against the vendored tree-sitter core sources in [third_party/tree-sitter](/Users/dmytro/work/github/thrift-weaver/third_party/tree-sitter).
+
 ## Artifact Paths
 
 - Wasm artifact: [thrift.wasm](/Users/dmytro/work/github/thrift-weaver/internal/grammars/thrift/thrift.wasm)
@@ -37,6 +39,7 @@ The wasm output filename is fixed (`thrift.wasm`) to keep byte output determinis
 `thriftls` embeds `thrift.wasm` and `thrift.wasm.sha256` into the binary via `go:embed` from [embed.go](/Users/dmytro/work/github/thrift-weaver/internal/grammars/thrift/embed.go).
 
 This is the only supported runtime packaging path. The server does not load the grammar from the filesystem at runtime and does not shell out to `tree-sitter`.
+The repo also does not depend on the Go cgo binding module for grammar/runtime source discovery; the required tree-sitter core C sources are vendored locally.
 
 ## Verify Drift and Checksums
 

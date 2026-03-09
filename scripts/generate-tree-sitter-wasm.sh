@@ -8,7 +8,7 @@ ARTIFACT_DIR="$ROOT_DIR/internal/grammars/thrift"
 WASM_PATH="$ARTIFACT_DIR/thrift.wasm"
 CHECKSUM_PATH="$ARTIFACT_DIR/thrift.wasm.sha256"
 RUNTIME_WRAPPER="$ROOT_DIR/internal/grammars/thrift/runtime/thrift_runtime.c"
-TREE_SITTER_CORE_DIR="$(mise exec go -- go list -m -f '{{.Dir}}' github.com/tree-sitter/go-tree-sitter 2>/dev/null || true)"
+TREE_SITTER_CORE_DIR="$ROOT_DIR/third_party/tree-sitter"
 # We compile directly with the wasi-sdk clang that tree-sitter CLI bootstraps.
 # `tree-sitter build --wasm` only produces a grammar module (`tree_sitter_thrift`)
 # and cannot add our runtime wrapper exports (`tw_parser_*`, `tw_node_*`, ...),
@@ -16,11 +16,6 @@ TREE_SITTER_CORE_DIR="$(mise exec go -- go list -m -f '{{.Dir}}' github.com/tree
 WASI_CLANG="${WASI_CLANG:-$HOME/.cache/tree-sitter/wasi-sdk/bin/clang}"
 
 mkdir -p "$ARTIFACT_DIR"
-
-if [[ -z "${TREE_SITTER_CORE_DIR:-}" || ! -f "$TREE_SITTER_CORE_DIR/src/lib.c" ]]; then
-  mise exec go -- go mod download github.com/tree-sitter/go-tree-sitter >/dev/null
-  TREE_SITTER_CORE_DIR="$(mise exec go -- go list -m -f '{{.Dir}}' github.com/tree-sitter/go-tree-sitter 2>/dev/null || true)"
-fi
 
 if [[ -z "${TREE_SITTER_CORE_DIR:-}" || ! -f "$TREE_SITTER_CORE_DIR/src/lib.c" ]]; then
   echo "failed to resolve tree-sitter core runtime sources (expected \$DIR/src/lib.c)" >&2
