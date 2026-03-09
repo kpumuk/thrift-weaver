@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
-	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
 
 const (
@@ -34,48 +33,13 @@ func (FieldIDUniqueRule) Run(ctx context.Context, tree *syntax.Tree) ([]syntax.D
 		return nil, err
 	}
 
-	byParent := make(map[syntax.NodeID]map[string][]itext.Span)
-	forEachNamedNode(tree, func(n *syntax.Node, kind string) {
-		if kind != "field" {
-			return
-		}
-		if hasErrorFlags(n.Flags) {
-			return
-		}
-
-		fieldIDSpan := firstChildSpanByKind(tree, n.ID, "field_id")
-		if !fieldIDSpan.IsValid() {
-			return
-		}
-
-		fieldIDKey := normalizedIntegerLiteral(textForSpan(tree.Source, fieldIDSpan))
-		if fieldIDKey == "" {
-			return
-		}
-
-		if byParent[n.Parent] == nil {
-			byParent[n.Parent] = make(map[string][]itext.Span)
-		}
-		byParent[n.Parent][fieldIDKey] = append(byParent[n.Parent][fieldIDKey], fieldIDSpan)
-	})
-
-	out := make([]syntax.Diagnostic, 0, 4)
-	for _, byValue := range byParent {
-		for _, spans := range byValue {
-			if len(spans) < 2 {
-				continue
-			}
-			for _, span := range spans {
-				out = append(out, newRecoverableError(
-					DiagnosticFieldIDDuplicate,
-					"explicit field id is duplicated within the same containing field list",
-					span,
-				))
-			}
-		}
-	}
-
-	return out, nil
+	return duplicateFieldChildDiagnostics(
+		tree,
+		"field_id",
+		normalizedIntegerLiteral,
+		DiagnosticFieldIDDuplicate,
+		"explicit field id is duplicated within the same containing field list",
+	), nil
 }
 
 func normalizedIntegerLiteral(raw string) string {

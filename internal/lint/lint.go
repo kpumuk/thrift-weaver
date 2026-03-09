@@ -38,6 +38,7 @@ func NewDefaultRunner() *Runner {
 	return NewRunner(
 		FieldIDRequiredRule{},
 		FieldIDUniqueRule{},
+		FieldNameUniqueRule{},
 		DeprecatedFieldModifiersRule{},
 		DeprecatedXSDAllRule{},
 		UnionFieldRequirednessRule{},

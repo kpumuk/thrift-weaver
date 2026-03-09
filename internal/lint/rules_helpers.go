@@ -34,6 +34,69 @@ func newRecoverableDiagnostic(code syntax.DiagnosticCode, message string, severi
 	}
 }
 
+func duplicateFieldChildSpans(
+	tree *syntax.Tree,
+	childKind string,
+	normalize func(string) string,
+) [][]itext.Span {
+	if tree == nil || childKind == "" {
+		return nil
+	}
+	if normalize == nil {
+		normalize = func(raw string) string { return raw }
+	}
+
+	byParent := make(map[syntax.NodeID]map[string][]itext.Span)
+	forEachNamedNode(tree, func(n *syntax.Node, kind string) {
+		if kind != "field" || hasErrorFlags(n.Flags) {
+			return
+		}
+
+		childSpan := firstChildSpanByKind(tree, n.ID, childKind)
+		if !childSpan.IsValid() {
+			return
+		}
+
+		key := normalize(textForSpan(tree.Source, childSpan))
+		if key == "" {
+			return
+		}
+
+		if byParent[n.Parent] == nil {
+			byParent[n.Parent] = make(map[string][]itext.Span)
+		}
+		byParent[n.Parent][key] = append(byParent[n.Parent][key], childSpan)
+	})
+
+	out := make([][]itext.Span, 0, len(byParent))
+	for _, byValue := range byParent {
+		for _, spans := range byValue {
+			if len(spans) < 2 {
+				continue
+			}
+			out = append(out, spans)
+		}
+	}
+	return out
+}
+
+func duplicateFieldChildDiagnostics(
+	tree *syntax.Tree,
+	childKind string,
+	normalize func(string) string,
+	code syntax.DiagnosticCode,
+	message string,
+) []syntax.Diagnostic {
+	duplicates := duplicateFieldChildSpans(tree, childKind, normalize)
+	out := make([]syntax.Diagnostic, 0, 4)
+	for _, spans := range duplicates {
+		for _, span := range spans {
+			out = append(out, newRecoverableError(code, message, span))
+		}
+	}
+	return out
+}
+
 func forEachNamedNode(tree *syntax.Tree, fn func(n *syntax.Node, kind string)) {
 	if tree == nil || fn == nil {
 		return

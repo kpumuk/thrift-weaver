@@ -126,6 +126,7 @@ thriftlint --format json path/to/file.thrift
 
 - explicit field IDs are required
 - explicit field IDs must be unique within the same containing field list
+- field names must be unique within the same containing field list
 - deprecated field modifiers: `xsd_optional`, `xsd_nillable`, `xsd_attrs`
 - deprecated struct/exception `xsd_all`
 - `required` fields are rejected inside `union`

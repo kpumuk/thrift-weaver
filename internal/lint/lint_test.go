@@ -68,6 +68,39 @@ service API {
 	}
 }
 
+func TestFieldNameUniqueRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+struct S {
+  1: string name,
+  2: string name,
+  3: string ok,
+}
+
+service API {
+  void ping(1: string left, 2: string left),
+  void pong(1: string left, 2: string right),
+}
+`)
+
+	diags, err := FieldNameUniqueRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 4 {
+		t.Fatalf("diagnostic count=%d, want 4", len(diags))
+	}
+	for _, d := range diags {
+		if d.Code != DiagnosticFieldNameDuplicate {
+			t.Fatalf("unexpected diagnostic code: %+v", d)
+		}
+		if d.Severity != syntax.SeverityError {
+			t.Fatalf("diagnostic severity=%v, want %v", d.Severity, syntax.SeverityError)
+		}
+	}
+}
+
 func TestDeprecatedFieldModifiersRule(t *testing.T) {
 	t.Parallel()
 
@@ -175,8 +208,9 @@ func TestDefaultRunnerIncludesSourceAndAggregatesRules(t *testing.T) {
 	tree := mustParseTree(t, `
 struct S {
   string name xsd_optional,
-  1: string first,
+  1: string dup,
   1: string second,
+  2: string dup,
 }
 
 union Choice xsd_all {
@@ -193,14 +227,17 @@ enum Result {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(diags) != 7 {
-		t.Fatalf("diagnostic count=%d, want 7", len(diags))
+	if len(diags) != 9 {
+		t.Fatalf("diagnostic count=%d, want 9", len(diags))
 	}
 	if !hasCode(diags, DiagnosticFieldIDRequired) {
 		t.Fatalf("missing %s in %+v", DiagnosticFieldIDRequired, diags)
 	}
 	if !hasCode(diags, DiagnosticFieldIDDuplicate) {
 		t.Fatalf("missing %s in %+v", DiagnosticFieldIDDuplicate, diags)
+	}
+	if !hasCode(diags, DiagnosticFieldNameDuplicate) {
+		t.Fatalf("missing %s in %+v", DiagnosticFieldNameDuplicate, diags)
 	}
 	if !hasCode(diags, DiagnosticDeprecatedFieldXSDOptional) {
 		t.Fatalf("missing %s in %+v", DiagnosticDeprecatedFieldXSDOptional, diags)

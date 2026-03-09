@@ -154,6 +154,7 @@ Current built-in lint rules:
 
 - explicit field IDs required
 - explicit field IDs unique within the same containing field list
+- field names unique within the same containing field list
 - deprecated field `xsd_optional`
 - deprecated field `xsd_nillable`
 - deprecated field `xsd_attrs`

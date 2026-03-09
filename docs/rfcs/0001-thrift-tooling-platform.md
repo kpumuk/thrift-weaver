@@ -37,7 +37,7 @@ Building a dedicated tooling project allows:
 
 - Provide a deterministic, idempotent Thrift formatter (`thriftfmt`)
 - Provide a Thrift linter CLI (`thriftlint`) that reuses parser diagnostics and lint rules
-- Provide baseline structural lint rules for duplicate explicit field IDs and other deprecated/unsafe constructs detectable within a single document
+- Provide baseline structural lint rules for duplicate explicit field IDs, duplicate field names, and other deprecated/unsafe constructs detectable within a single document
 - Provide a production-quality LSP server (`thriftls`) for editors
 - Provide a VS Code extension with syntax highlighting and LSP client integration
 - Preserve comments and syntax fidelity where formatter policy permits
