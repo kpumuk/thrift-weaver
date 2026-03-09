@@ -70,7 +70,7 @@
     "commands": [
       {
         "command": "thrift.restartLanguageServer",
-        "title": "Thrift: Restart Language Server"
+        "title": "Weaver for Apache Thift: Restart Language Server"
       }
     ],
     "configurationDefaults": {

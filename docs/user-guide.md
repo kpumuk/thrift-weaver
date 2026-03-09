@@ -269,7 +269,7 @@ Extension defaults for Apache Thrift files:
 - folding ranges
 - selection ranges
 - semantic tokens
-- `Thrift: Restart Language Server` command
+- `Weaver for Apache Thift: Restart Language Server` command
 
 ### Troubleshooting
 

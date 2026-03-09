@@ -61,7 +61,7 @@ code --install-extension thrift-weaver-vscode-<version>.vsix --force
 - Folding ranges.
 - Selection ranges.
 - Semantic tokens.
-- Command: `Thrift: Restart Language Server`.
+- Command: `Weaver for Apache Thift: Restart Language Server`.
 
 ## Settings
 
@@ -117,7 +117,7 @@ Managed install flow:
 1. Open Output panel and check the current channel names:
    - `Weaver for Apache Thift`
    - `Weaver for Apache Thift LSP Trace`
-2. Run **Thrift: Restart Language Server**.
+2. Run **Weaver for Apache Thift: Restart Language Server**.
 3. Confirm the mode is `Thrift`.
 4. If needed, set `thrift.server.path`.
 
