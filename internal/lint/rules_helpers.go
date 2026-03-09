@@ -17,10 +17,18 @@ func normalizeContext(ctx context.Context) context.Context {
 }
 
 func newRecoverableWarning(code syntax.DiagnosticCode, message string, span itext.Span) syntax.Diagnostic {
+	return newRecoverableDiagnostic(code, message, syntax.SeverityWarning, span)
+}
+
+func newRecoverableError(code syntax.DiagnosticCode, message string, span itext.Span) syntax.Diagnostic {
+	return newRecoverableDiagnostic(code, message, syntax.SeverityError, span)
+}
+
+func newRecoverableDiagnostic(code syntax.DiagnosticCode, message string, severity syntax.Severity, span itext.Span) syntax.Diagnostic {
 	return syntax.Diagnostic{
 		Code:        code,
 		Message:     message,
-		Severity:    syntax.SeverityWarning,
+		Severity:    severity,
 		Span:        span,
 		Recoverable: true,
 	}

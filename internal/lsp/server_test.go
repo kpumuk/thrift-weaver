@@ -179,7 +179,7 @@ func TestServerRunPublishesLintDiagnosticsOnOpenChangeSave(t *testing.T) {
 		Params: mustJSON(t, DidChangeParams{
 			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///lint.thrift", Version: 2},
 			ContentChanges: []TextDocumentContentChangeEvent{{
-				Text: "struct S {\n  1: string name xsd_optional,\n}\n",
+				Text: "struct S {\n  1: string name xsd_optional,\n  1: string alias,\n}\n",
 			}},
 		}),
 	})
@@ -227,6 +227,9 @@ func TestServerRunPublishesLintDiagnosticsOnOpenChangeSave(t *testing.T) {
 	}
 	if !containsDiagnosticCode(saveDiag.Diagnostics, "LINT_DEPRECATED_FIELD_XSD_OPTIONAL") {
 		t.Fatalf("didSave diagnostics missing LINT_DEPRECATED_FIELD_XSD_OPTIONAL: %+v", saveDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(saveDiag.Diagnostics, "LINT_FIELD_ID_DUPLICATE") {
+		t.Fatalf("didSave diagnostics missing LINT_FIELD_ID_DUPLICATE: %+v", saveDiag.Diagnostics)
 	}
 }
 

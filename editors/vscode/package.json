@@ -86,7 +86,7 @@
         "thrift.server.path": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to a `thriftls` binary. When empty, the extension will use managed install (M4 Track C)."
+          "markdownDescription": "Path to a `thriftls` binary. When empty, the extension will use managed install."
         },
         "thrift.server.args": {
           "type": "array",
