@@ -24,16 +24,24 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 
 	lexRes := lexer.Lex(src)
 
+	attempt, err := beginBackendAttempt()
+	if err != nil {
+		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, err), nil
+	}
+
 	parser, err := currentParserFactory().NewParser()
 	if err != nil {
+		completeBackendAttemptFailure(attempt, err)
 		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("init parser: %w", err)), nil
 	}
 	rawTree, err := parser.Parse(ctx, src, nil)
 	if err != nil {
 		parser.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			completeBackendAttemptFailure(attempt, ctxErr)
 			return nil, ctxErr
 		}
+		completeBackendAttemptFailure(attempt, err)
 		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("parse source: %w", err)), nil
 	}
 	out, err := buildSyntaxTreeFromRawWithLexResult(ctx, src, opts, rawTree, lexRes)
@@ -42,6 +50,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 		parser.Close()
 		return nil, err
 	}
+	completeBackendAttemptSuccess(attempt)
 	adoptRuntimeTree(out, &parseRuntimeState{
 		parser:             parser,
 		rawTree:            rawTree,
@@ -116,8 +125,15 @@ func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte,
 		)
 	}
 
+	attempt, err := beginBackendAttempt()
+	if err != nil {
+		old.closeRuntime()
+		return buildDegradedTreeForParserFailure(src, opts, err), nil
+	}
+
 	for _, edit := range edits {
 		if err := state.rawTree.ApplyEdit(ctx, toTSEdit(edit)); err != nil {
+			completeBackendAttemptFailure(attempt, err)
 			state.incrementalEnabled = false
 			return fallbackIncrementalReparse(
 				ctx,
@@ -132,6 +148,7 @@ func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte,
 
 	incrementalRaw, err := state.parser.Parse(ctx, src, state.rawTree)
 	if err != nil {
+		completeBackendAttemptFailure(attempt, err)
 		state.incrementalEnabled = false
 		return fallbackIncrementalReparse(
 			ctx,
@@ -146,6 +163,7 @@ func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte,
 	changed, err := state.rawTree.ChangedRanges(ctx, incrementalRaw)
 	if err != nil {
 		incrementalRaw.Close()
+		completeBackendAttemptFailure(attempt, err)
 		state.incrementalEnabled = false
 		return fallbackIncrementalReparse(
 			ctx,
@@ -175,6 +193,7 @@ func ApplyIncrementalEditsAndReparse(ctx context.Context, old *Tree, src []byte,
 		incrementalRaw.Close()
 		return nil, err
 	}
+	completeBackendAttemptSuccess(attempt)
 	out.ChangedRanges = changedSpans
 
 	nextState := &parseRuntimeState{

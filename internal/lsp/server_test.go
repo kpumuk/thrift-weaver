@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kpumuk/thrift-weaver/internal/syntax"
+	parserbackend "github.com/kpumuk/thrift-weaver/internal/syntax/backend"
+	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
 
@@ -348,6 +351,104 @@ func TestServerRunSuppressesStaleDebouncedLintDiagnostics(t *testing.T) {
 	}
 	if len(finalDiag.Diagnostics) != 0 {
 		t.Fatalf("expected v3 debounced lint to clear diagnostics, got %+v", finalDiag.Diagnostics)
+	}
+}
+
+func TestServerRunPublishesCurrentParserDiagnosticsOnDidChangeFailure(t *testing.T) {
+	restoreBreaker := syntax.ResetBackendBreakerForTesting()
+	defer restoreBreaker()
+
+	restoreFactory := syntax.SetParserFactoryForTesting(&failSecondParseFactory{})
+	defer restoreFactory()
+
+	s := NewServer()
+	s.setLintDebounceForTesting(10 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{
+				URI:     "file:///parser-outage.thrift",
+				Version: 1,
+				Text:    "struct S {\n  string name,\n}\n",
+			},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: "file:///parser-outage.thrift", Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct S {\n  string renamed,\n}\n",
+			}},
+		}),
+	})
+
+	time.Sleep(60 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	notifications := collectPublishDiagnosticsMessages(t, readAllFrames(t, out.Bytes()))
+	if len(notifications) < 2 {
+		t.Fatalf("publishDiagnostics count=%d, want at least 2", len(notifications))
+	}
+
+	var sawCurrentParserFailure bool
+	for _, msg := range notifications {
+		var diag PublishDiagnosticsParams
+		marshalRoundtrip(t, msg.Params, &diag)
+		if diag.Version == nil || *diag.Version != 2 {
+			continue
+		}
+		if containsDiagnosticCode(diag.Diagnostics, string(syntax.DiagnosticInternalParse)) {
+			sawCurrentParserFailure = true
+		}
+		if containsDiagnosticCode(diag.Diagnostics, "LINT_FIELD_ID_REQUIRED") {
+			t.Fatalf("version 2 diagnostics reused stale lint findings: %+v", diag.Diagnostics)
+		}
+	}
+	if !sawCurrentParserFailure {
+		t.Fatalf("expected version 2 INTERNAL_PARSE diagnostics, got %+v", notifications)
+	}
+}
+
+func TestServerSuppressesStaleDiagnosticsAcrossCloseReopenSameVersion(t *testing.T) {
+	s := NewServer()
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	uri := "file:///generation-gate.thrift"
+	if err := s.DidOpen(context.Background(), DidOpenParams{TextDocument: TextDocumentItem{URI: uri, Version: 1, Text: "struct S {\n  1: string name,\n}\n"}}); err != nil {
+		t.Fatalf("DidOpen initial: %v", err)
+	}
+	initial, ok := s.Store().Snapshot(uri)
+	if !ok {
+		t.Fatal("expected initial snapshot")
+	}
+
+	if err := s.DidClose(context.Background(), DidCloseParams{TextDocument: TextDocumentIdentifier{URI: uri}}); err != nil {
+		t.Fatalf("DidClose: %v", err)
+	}
+
+	if err := s.DidOpen(context.Background(), DidOpenParams{TextDocument: TextDocumentItem{URI: uri, Version: 1, Text: "struct S {\n  1: string name\n}\n"}}); err != nil {
+		t.Fatalf("DidOpen reopened: %v", err)
+	}
+	reopened, ok := s.Store().Snapshot(uri)
+	if !ok {
+		t.Fatal("expected reopened snapshot")
+	}
+	if err := s.writeVersionedDiagnostics(uri, initial.Version, initial.Generation, []Diagnostic{{Code: "LINT_TEST_STALE"}}); err != nil {
+		t.Fatalf("writeVersionedDiagnostics: %v", err)
+	}
+
+	if len(readAllFrames(t, out.Bytes())) != 0 {
+		t.Fatalf("expected no stale diagnostics, got %q", out.String())
+	}
+	if reopened.Generation <= initial.Generation {
+		t.Fatalf("reopened generation=%d, want > %d", reopened.Generation, initial.Generation)
 	}
 }
 
@@ -897,4 +998,38 @@ func containsDiagnosticCode(in []Diagnostic, code string) bool {
 		}
 	}
 	return false
+}
+
+type failSecondParseFactory struct{}
+
+func (f *failSecondParseFactory) Name() string {
+	return "fail-second-parse-factory"
+}
+
+func (f *failSecondParseFactory) NewParser() (parserbackend.Parser, error) {
+	inner, err := ts.NewParser()
+	if err != nil {
+		return nil, err
+	}
+	return &failSecondParseParser{inner: inner}, nil
+}
+
+type failSecondParseParser struct {
+	inner parserbackend.Parser
+	calls int
+}
+
+func (p *failSecondParseParser) Parse(ctx context.Context, src []byte, old *ts.Tree) (*ts.Tree, error) {
+	p.calls++
+	if p.calls >= 2 {
+		return nil, errors.New("injected parse failure")
+	}
+	return p.inner.Parse(ctx, src, old)
+}
+
+func (p *failSecondParseParser) Close() {
+	if p.inner != nil {
+		p.inner.Close()
+		p.inner = nil
+	}
 }

@@ -42,8 +42,9 @@ type Server struct {
 }
 
 type lintJobState struct {
-	gen    uint64
-	cancel context.CancelFunc
+	version    int32
+	generation uint64
+	cancel     context.CancelFunc
 }
 
 const defaultLintDebounce = 150 * time.Millisecond
@@ -210,7 +211,7 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 		if err := s.publishSyntaxDiagnosticsForURI(p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
-		s.scheduleLintPublish(p.TextDocument.URI, p.TextDocument.Version)
+		s.scheduleLintPublishForURI(p.TextDocument.URI)
 		return nil
 	case "textDocument/didSave":
 		var p DidSaveParams
@@ -469,7 +470,7 @@ func (s *Server) publishDiagnosticsForURI(ctx context.Context, uri string) error
 	if err != nil {
 		return err
 	}
-	return s.writeVersionedDiagnostics(uri, snap.Version, diags)
+	return s.writeVersionedDiagnostics(uri, snap.Version, snap.Generation, diags)
 }
 
 func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
@@ -485,7 +486,7 @@ func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
 	if err != nil {
 		return err
 	}
-	return s.writeVersionedDiagnostics(uri, snap.Version, diags)
+	return s.writeVersionedDiagnostics(uri, snap.Version, snap.Generation, diags)
 }
 
 func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) ([]Diagnostic, error) {
@@ -530,12 +531,12 @@ func (s *Server) writePublishDiagnostics(params PublishDiagnosticsParams) error 
 	return s.writeMessage(body)
 }
 
-func (s *Server) writeVersionedDiagnostics(uri string, version int32, diags []Diagnostic) error {
+func (s *Server) writeVersionedDiagnostics(uri string, version int32, generation uint64, diags []Diagnostic) error {
 	snap, err := s.latestSnapshot(uri)
 	if err != nil {
 		return err
 	}
-	if snap == nil || snap.Version != version {
+	if !snapshotMatchesVersion(snap, version, generation) {
 		return nil
 	}
 
@@ -582,10 +583,17 @@ func (s *Server) runtimeContext() context.Context {
 	return s.runCtx
 }
 
-func (s *Server) scheduleLintPublish(uri string, version int32) {
+func (s *Server) scheduleLintPublishForURI(uri string) {
 	if s == nil || s.lint == nil || uri == "" {
 		return
 	}
+
+	snap, err := s.latestSnapshot(uri)
+	if err != nil || snap == nil {
+		return
+	}
+	version := snap.Version
+	generation := snap.Generation
 
 	runCtx := s.runtimeContext()
 	if runCtx == nil {
@@ -595,21 +603,17 @@ func (s *Server) scheduleLintPublish(uri string, version int32) {
 	ctx, cancel := context.WithCancel(runCtx)
 
 	s.lintMu.Lock()
-	state := s.lintJobs[uri]
-	if state.cancel != nil {
+	if state := s.lintJobs[uri]; state.cancel != nil {
 		state.cancel()
 	}
-	state.gen++
-	state.cancel = cancel
-	gen := state.gen
-	s.lintJobs[uri] = state
+	s.lintJobs[uri] = lintJobState{version: version, generation: generation, cancel: cancel}
 	debounce := s.lintDebounce
 	s.lintWG.Add(1)
 	s.lintMu.Unlock()
 
 	go func() {
 		defer s.lintWG.Done()
-		defer s.finishLintJob(uri, gen)
+		defer s.finishLintJob(uri, version, generation)
 
 		timer := time.NewTimer(debounce)
 		defer timer.Stop()
@@ -620,19 +624,19 @@ func (s *Server) scheduleLintPublish(uri string, version int32) {
 		case <-timer.C:
 		}
 
-		if !s.isLintJobCurrent(uri, gen) {
+		if !s.isLintJobCurrent(uri, version, generation) {
 			return
 		}
-		_ = s.publishDebouncedLintDiagnostics(ctx, uri, version, gen)
+		_ = s.publishDebouncedLintDiagnostics(ctx, uri, version, generation)
 	}()
 }
 
-func (s *Server) publishDebouncedLintDiagnostics(ctx context.Context, uri string, version int32, gen uint64) error {
+func (s *Server) publishDebouncedLintDiagnostics(ctx context.Context, uri string, version int32, generation uint64) error {
 	snap, err := s.latestSnapshot(uri)
 	if err != nil {
 		return err
 	}
-	if snap == nil || snap.Version != version {
+	if !snapshotMatchesVersion(snap, version, generation) {
 		return nil
 	}
 
@@ -646,10 +650,10 @@ func (s *Server) publishDebouncedLintDiagnostics(ctx context.Context, uri string
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if !s.isLintJobCurrent(uri, gen) {
+	if !s.isLintJobCurrent(uri, version, generation) {
 		return nil
 	}
-	return s.writeVersionedDiagnostics(uri, version, diags)
+	return s.writeVersionedDiagnostics(uri, version, generation, diags)
 }
 
 func (s *Server) invalidateLintJob(uri string) {
@@ -660,16 +664,13 @@ func (s *Server) invalidateLintJob(uri string) {
 	s.lintMu.Lock()
 	defer s.lintMu.Unlock()
 
-	state := s.lintJobs[uri]
-	if state.cancel != nil {
+	if state := s.lintJobs[uri]; state.cancel != nil {
 		state.cancel()
 	}
-	state.gen++
-	state.cancel = nil
-	s.lintJobs[uri] = state
+	delete(s.lintJobs, uri)
 }
 
-func (s *Server) finishLintJob(uri string, gen uint64) {
+func (s *Server) finishLintJob(uri string, version int32, generation uint64) {
 	if s == nil || uri == "" {
 		return
 	}
@@ -678,14 +679,14 @@ func (s *Server) finishLintJob(uri string, gen uint64) {
 	defer s.lintMu.Unlock()
 
 	state, ok := s.lintJobs[uri]
-	if !ok || state.gen != gen {
+	if !ok || state.version != version || state.generation != generation {
 		return
 	}
 	state.cancel = nil
 	s.lintJobs[uri] = state
 }
 
-func (s *Server) isLintJobCurrent(uri string, gen uint64) bool {
+func (s *Server) isLintJobCurrent(uri string, version int32, generation uint64) bool {
 	if s == nil || uri == "" {
 		return false
 	}
@@ -694,7 +695,11 @@ func (s *Server) isLintJobCurrent(uri string, gen uint64) bool {
 	defer s.lintMu.Unlock()
 
 	state, ok := s.lintJobs[uri]
-	return ok && state.gen == gen
+	return ok && state.version == version && state.generation == generation
+}
+
+func snapshotMatchesVersion(snap *Snapshot, version int32, generation uint64) bool {
+	return snap != nil && snap.Version == version && snap.Generation == generation
 }
 
 func (s *Server) cancelAllLintJobs() {
@@ -705,13 +710,12 @@ func (s *Server) cancelAllLintJobs() {
 	s.lintMu.Lock()
 	defer s.lintMu.Unlock()
 
-	for uri, state := range s.lintJobs {
+	for _, state := range s.lintJobs {
 		if state.cancel != nil {
 			state.cancel()
 		}
-		state.cancel = nil
-		s.lintJobs[uri] = state
 	}
+	clear(s.lintJobs)
 }
 
 func (s *Server) setLintDebounceForTesting(d time.Duration) {

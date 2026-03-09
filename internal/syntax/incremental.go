@@ -267,8 +267,18 @@ func fullReparseWithExistingParser(ctx context.Context, old *Tree, src []byte, o
 	if state == nil || state.parser == nil {
 		return Parse(ctx, src, opts)
 	}
+
+	attempt, err := beginBackendAttempt()
+	if err != nil {
+		if old != nil {
+			old.closeRuntime()
+		}
+		return buildDegradedTreeForParserFailure(src, opts, err), nil
+	}
+
 	newRawTree, err := state.parser.Parse(ctx, src, nil)
 	if err != nil {
+		completeBackendAttemptFailure(attempt, err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
@@ -282,6 +292,7 @@ func fullReparseWithExistingParser(ctx context.Context, old *Tree, src []byte, o
 		newRawTree.Close()
 		return nil, err
 	}
+	completeBackendAttemptSuccess(attempt)
 	nextState := &parseRuntimeState{
 		parser:             state.parser,
 		rawTree:            newRawTree,

@@ -15,7 +15,9 @@ import (
 type Snapshot struct {
 	URI     string
 	Version int32
-	Tree    *syntax.Tree
+	// Generation increments on each successful document mutation and is used to suppress stale async output.
+	Generation uint64
+	Tree       *syntax.Tree
 }
 
 // Bytes returns a copy of the snapshot source bytes.
@@ -29,12 +31,20 @@ func (s *Snapshot) Bytes() []byte {
 // SnapshotStore stores versioned parsed documents.
 type SnapshotStore struct {
 	mu   sync.RWMutex
-	docs map[string]*Snapshot
+	docs map[string]*documentState
+}
+
+type documentState struct {
+	mu       sync.RWMutex
+	snapshot *Snapshot
+	// generation survives close/reopen so async work for an older incarnation
+	// of the same URI cannot publish into a newly opened document.
+	generation uint64
 }
 
 // NewSnapshotStore creates an empty snapshot store.
 func NewSnapshotStore() *SnapshotStore {
-	return &SnapshotStore{docs: make(map[string]*Snapshot)}
+	return &SnapshotStore{docs: make(map[string]*documentState)}
 }
 
 // Open parses and stores a document snapshot.
@@ -42,18 +52,15 @@ func (s *SnapshotStore) Open(ctx context.Context, uri string, version int32, src
 	if s == nil {
 		return nil, errors.New("nil SnapshotStore")
 	}
+	doc := s.documentState(uri, true)
+	doc.mu.Lock()
+	defer doc.mu.Unlock()
+
 	tree, err := syntax.Parse(ctx, src, syntax.ParseOptions{URI: uri, Version: version})
 	if err != nil {
 		return nil, err
 	}
-	snap := &Snapshot{URI: uri, Version: version, Tree: tree}
-	s.mu.Lock()
-	if prev, ok := s.docs[uri]; ok && prev != nil && prev.Tree != nil {
-		prev.Tree.Close()
-	}
-	s.docs[uri] = snap
-	s.mu.Unlock()
-	return snap, nil
+	return doc.storeSnapshotLocked(uri, version, tree), nil
 }
 
 // Change applies incremental LSP changes, reparses, and replaces the snapshot.
@@ -61,10 +68,15 @@ func (s *SnapshotStore) Change(ctx context.Context, uri string, version int32, c
 	if s == nil {
 		return nil, errors.New("nil SnapshotStore")
 	}
-	s.mu.RLock()
-	cur, ok := s.docs[uri]
-	s.mu.RUnlock()
-	if !ok {
+	doc := s.documentState(uri, false)
+	if doc == nil {
+		return nil, ErrDocumentNotOpen
+	}
+	doc.mu.Lock()
+	defer doc.mu.Unlock()
+
+	cur := doc.snapshot
+	if cur == nil {
 		return nil, ErrDocumentNotOpen
 	}
 	if version <= cur.Version {
@@ -84,12 +96,7 @@ func (s *SnapshotStore) Change(ctx context.Context, uri string, version int32, c
 	if err != nil {
 		return nil, err
 	}
-	next := &Snapshot{URI: uri, Version: version, Tree: nextTree}
-	s.mu.Lock()
-	s.docs[uri] = next
-	s.mu.Unlock()
-	cur.Tree.Close()
-	return next, nil
+	return doc.storeSnapshotLocked(uri, version, nextTree), nil
 }
 
 // Close removes a tracked document snapshot.
@@ -97,12 +104,18 @@ func (s *SnapshotStore) Close(uri string) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	if snap, ok := s.docs[uri]; ok && snap != nil && snap.Tree != nil {
+	doc := s.documentState(uri, false)
+	if doc == nil {
+		return
+	}
+
+	doc.mu.Lock()
+	snap := doc.clearSnapshotLocked()
+	doc.mu.Unlock()
+
+	if snap != nil && snap.Tree != nil {
 		snap.Tree.Close()
 	}
-	delete(s.docs, uri)
-	s.mu.Unlock()
 }
 
 // Snapshot returns the current snapshot for uri.
@@ -110,10 +123,17 @@ func (s *SnapshotStore) Snapshot(uri string) (*Snapshot, bool) {
 	if s == nil {
 		return nil, false
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	snap, ok := s.docs[uri]
-	return snap, ok
+	doc := s.documentState(uri, false)
+	if doc == nil {
+		return nil, false
+	}
+
+	doc.mu.RLock()
+	defer doc.mu.RUnlock()
+	if doc.snapshot == nil {
+		return nil, false
+	}
+	return doc.snapshot, true
 }
 
 // SnapshotAtVersion returns the current snapshot if the version matches exactly.
@@ -126,6 +146,51 @@ func (s *SnapshotStore) SnapshotAtVersion(uri string, version int32) (*Snapshot,
 		return nil, ErrStaleVersion
 	}
 	return snap, nil
+}
+
+func (s *SnapshotStore) documentState(uri string, create bool) *documentState {
+	s.mu.RLock()
+	doc := s.docs[uri]
+	s.mu.RUnlock()
+	if doc != nil || !create {
+		return doc
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if doc = s.docs[uri]; doc != nil {
+		return doc
+	}
+	doc = &documentState{}
+	s.docs[uri] = doc
+	return doc
+}
+
+func (d *documentState) nextGeneration() uint64 {
+	d.generation++
+	return d.generation
+}
+
+func (d *documentState) storeSnapshotLocked(uri string, version int32, tree *syntax.Tree) *Snapshot {
+	snap := &Snapshot{
+		URI:        uri,
+		Version:    version,
+		Generation: d.nextGeneration(),
+		Tree:       tree,
+	}
+	prev := d.snapshot
+	d.snapshot = snap
+	if prev != nil && prev.Tree != nil {
+		prev.Tree.Close()
+	}
+	return snap
+}
+
+func (d *documentState) clearSnapshotLocked() *Snapshot {
+	snap := d.snapshot
+	d.snapshot = nil
+	d.nextGeneration()
+	return snap
 }
 
 func applyContentChanges(src []byte, changes []TextDocumentContentChangeEvent) ([]byte, []syntax.InputEdit, bool, error) {

@@ -22,6 +22,9 @@ func TestSnapshotStoreOpenChangeCloseLifecycle(t *testing.T) {
 	if snap.Version != 1 {
 		t.Fatalf("version=%d, want 1", snap.Version)
 	}
+	if snap.Generation != 1 {
+		t.Fatalf("generation=%d, want 1", snap.Generation)
+	}
 
 	next, err := store.Change(context.Background(), uri, 2, []TextDocumentContentChangeEvent{{
 		Range: &Range{
@@ -36,6 +39,9 @@ func TestSnapshotStoreOpenChangeCloseLifecycle(t *testing.T) {
 	if next.Version != 2 {
 		t.Fatalf("version=%d, want 2", next.Version)
 	}
+	if next.Generation != 2 {
+		t.Fatalf("generation=%d, want 2", next.Generation)
+	}
 	if got := string(next.Tree.Source); !strings.Contains(got, "string b") {
 		t.Fatalf("unexpected source after change: %q", got)
 	}
@@ -47,6 +53,14 @@ func TestSnapshotStoreOpenChangeCloseLifecycle(t *testing.T) {
 	store.Close(uri)
 	if _, ok := store.Snapshot(uri); ok {
 		t.Fatal("expected snapshot removed after close")
+	}
+
+	reopened, err := store.Open(context.Background(), uri, 1, openSrc)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reopened.Generation != 4 {
+		t.Fatalf("reopened generation=%d, want 4", reopened.Generation)
 	}
 }
 

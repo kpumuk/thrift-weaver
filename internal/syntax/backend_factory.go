@@ -31,3 +31,8 @@ func setParserFactoryForTesting(factory parserbackend.Factory) func() {
 		parserFactoryMu.Unlock()
 	}
 }
+
+// SetParserFactoryForTesting overrides the parser factory for integration tests.
+func SetParserFactoryForTesting(factory parserbackend.Factory) func() {
+	return setParserFactoryForTesting(factory)
+}
