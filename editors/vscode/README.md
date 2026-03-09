@@ -1,6 +1,6 @@
 <h3 align="center">
-	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="100" alt="Logo"/><br/>
-	Weaver for Apache Thift for <a href="https://code.visualstudio.com">VS Code</a>
+	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="128" alt="Logo"/><br/>
+	Linter, Formatter, LSP Server and a <a href="https://code.visualstudio.com">VS Code</a> Extension
 </h3>
 
 <p align="center">
