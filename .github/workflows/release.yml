@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+env:
+  CGO_ENABLED: "0"
+
 jobs:
   package-vscode-extension:
     name: package-vscode-extension
@@ -93,6 +96,15 @@ jobs:
             --extension-version "${GITHUB_REF_NAME#v}" \
             --output dist/vscode-release-metadata.json
 
+      - name: Prepare checksum verification roots
+        run: scripts/prepare-checksum-roots.sh .checksum-roots
+
+      - name: Verify release checksums
+        run: go run ./scripts/verify-checksums --checksums dist/checksums.txt --root dist --root .checksum-roots
+
+      - name: Generate release SBOM
+        run: go run ./scripts/generate-sbom --version "${GITHUB_REF_NAME#v}" --output dist/sbom.cdx.json
+
       - name: Generate artifact attestations (release artifacts)
         uses: actions/attest-build-provenance@v4
         with:
@@ -103,6 +115,7 @@ jobs:
             .release-extra/*.vsix
             dist/thriftls-manifest.json
             dist/vscode-release-metadata.json
+            dist/sbom.cdx.json
 
       - name: Upload manifest + metadata to draft release
         uses: softprops/action-gh-release@v2
@@ -112,6 +125,7 @@ jobs:
           files: |
             dist/thriftls-manifest.json
             dist/vscode-release-metadata.json
+            dist/sbom.cdx.json
 
   publish-vscode-marketplace:
     name: publish-vscode-marketplace

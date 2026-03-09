@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CGO_ENABLED: "0"
+
 jobs:
   lint-and-test:
     name: lint-and-test
@@ -31,8 +34,6 @@ jobs:
   build-smoke:
     name: build-smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    env:
-      CGO_ENABLED: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +150,9 @@ jobs:
       - name: Run GoReleaser release path (snapshot smoke)
         run: mise exec goreleaser -- goreleaser release --snapshot --clean
 
+      - name: Prepare checksum verification roots
+        run: scripts/prepare-checksum-roots.sh .checksum-roots
+
       - name: Generate checksums + release metadata (smoke)
         run: |
           snapshot_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' dist/metadata.json | head -n1)"
@@ -176,6 +180,49 @@ jobs:
           test -s dist/checksums.txt
           test -s dist/thriftls-manifest.json
           test -s dist/vscode-release-metadata.json
+
+      - name: Verify release checksums (smoke)
+        run: go run ./scripts/verify-checksums --checksums dist/checksums.txt --root dist --root .checksum-roots
+
+      - name: Generate release SBOM (smoke)
+        run: |
+          snapshot_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' dist/metadata.json | head -n1)"
+          go run ./scripts/generate-sbom --version "$snapshot_version" --output dist/sbom.cdx.json
+          test -s dist/sbom.cdx.json
+
+      - name: Upload release integrity artifacts (smoke)
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-integrity-smoke
+          path: |
+            dist/checksums.txt
+            dist/thriftls-manifest.json
+            dist/vscode-release-metadata.json
+            dist/sbom.cdx.json
+          if-no-files-found: error
+
+  perf-gate:
+    name: perf-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up mise
+        uses: jdx/mise-action@v3
+
+      - name: Install pinned tools
+        run: mise install
+
+      - name: Run performance gate
+        run: mise run perf-gate
+
+      - name: Upload perf gate report
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-gate-report
+          path: .tmp/perf-report.json
+          if-no-files-found: error
 
   parser-generation-drift:
     name: parser-generation-drift

@@ -57,3 +57,11 @@ run = "scripts/generate-tree-sitter.sh && scripts/generate-tree-sitter-wasm.sh"
 [tasks.grammars-drift]
 description = "Validate parser and wasm grammar artifacts are up to date"
 run = "scripts/generate-tree-sitter.sh && scripts/generate-tree-sitter-wasm.sh && scripts/verify-tree-sitter-wasm.sh && git diff --exit-code -- grammar/tree-sitter-thrift/src internal/grammars/thrift/thrift.wasm internal/grammars/thrift/thrift.wasm.sha256"
+
+[tasks.perf-gate]
+description = "Run the CI performance gate on the pinned repo corpus"
+run = "mkdir -p .tmp && go run ./scripts/perf-report --iterations 10 --warmup 2 --memory-iterations 200 --memory-sample-every 20 --json .tmp/perf-report.json && go run ./scripts/check-perf-gate --json .tmp/perf-report.json"
+
+[tasks.generate-sbom]
+description = "Generate a CycloneDX SBOM for the current module graph"
+run = "mkdir -p dist && go run ./scripts/generate-sbom --output dist/sbom.cdx.json"

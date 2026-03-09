@@ -3,6 +3,7 @@
 /thriftls
 /dist/
 /.release-extra/
+/.tmp/
 
 # OS metadata
 .DS_Store
