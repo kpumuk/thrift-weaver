@@ -1,6 +1,6 @@
 <h3 align="center">
 	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="100" alt="Logo"/><br/>
-	Thrift Weaver for <a href="https://code.visualstudio.com">VSCode</a>
+	Weaver for Apache Thift for <a href="https://code.visualstudio.com">VS Code</a>
 </h3>
 
 <p align="center">
@@ -9,7 +9,10 @@
     <a href="https://github.com/kpumuk/thrift-weaver/contributors"><img src="https://img.shields.io/github/contributors/kpumuk/thrift-weaver?colorA=363a4f&colorB=a6da95&style=for-the-badge"></a>
 </p>
 
-Thrift Weaver adds Thrift support to VS Code.
+**Weaver for Apache Thift** adds Apache Thrift support to VS Code.
+
+> [!NOTE]
+> **Weaver for Apache Thift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation. The extension identifier is `kpumuk.thrift-weaver-vscode`.
 
 ## Why This Extension
 
@@ -26,13 +29,13 @@ Thrift Weaver adds Thrift support to VS Code.
 2. Search for `kpumuk.thrift-weaver-vscode`.
 3. Click **Install**.
 
-Marketplace page: [Thrift Weaver](https://marketplace.visualstudio.com/items?itemName=kpumuk.thrift-weaver-vscode)
+Marketplace page: [Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=kpumuk.thrift-weaver-vscode)
 
 ### Option 2: Open VSX Registry
 
 Install from Open VSX (useful for VS Code-compatible editors like VSCodium):
 
-[Thrift Weaver on Open VSX](https://open-vsx.org/extension/kpumuk/thrift-weaver-vscode)
+[Open VSX listing](https://open-vsx.org/extension/kpumuk/thrift-weaver-vscode)
 
 ### Option 3: Install `.vsix`
 
@@ -111,9 +114,9 @@ Managed install flow:
 
 ### No errors or format
 
-1. Open Output panel and check:
-   - `Thrift Weaver`
-   - `Thrift Weaver LSP Trace`
+1. Open Output panel and check the current channel names:
+   - `Weaver for Apache Thift`
+   - `Weaver for Apache Thift LSP Trace`
 2. Run **Thrift: Restart Language Server**.
 3. Confirm the mode is `Thrift`.
 4. If needed, set `thrift.server.path`.

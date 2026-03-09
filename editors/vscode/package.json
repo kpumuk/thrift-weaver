@@ -1,6 +1,6 @@
 {
   "name": "thrift-weaver-vscode",
-  "displayName": "Thrift Weaver",
+  "displayName": "Weaver for Apache Thift",
   "description": "Thrift language support for VS Code",
   "repository": {
     "type": "git",
@@ -81,7 +81,7 @@
       }
     },
     "configuration": {
-      "title": "Thrift Weaver",
+      "title": "Weaver for Apache Thift",
       "properties": {
         "thrift.server.path": {
           "type": "string",

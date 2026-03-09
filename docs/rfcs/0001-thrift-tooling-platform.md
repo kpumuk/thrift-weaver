@@ -1,4 +1,4 @@
-# RFC 0001: Thrift Tooling Platform (`thriftfmt`, `thriftlint`, `thriftls`, VS Code Extension)
+# RFC 0001: Weaver for Apache Thift Tooling Platform (`thriftfmt`, `thriftlint`, `thriftls`, VS Code Extension)
 
 - Status: Accepted
 - Authors: Dmytro Shteflyuk
@@ -7,7 +7,7 @@
 
 ## Summary
 
-This RFC proposes a new standalone tooling project for Thrift IDL editing and formatting, consisting of:
+This RFC proposes **Weaver for Apache Thift**, a standalone tooling project for Apache Thrift IDL editing and formatting, consisting of:
 
 - `thriftfmt`: a stable, lossless-aware formatter for `.thrift` files
 - `thriftlint`: a diagnostics-oriented linter for `.thrift` files
@@ -15,6 +15,8 @@ This RFC proposes a new standalone tooling project for Thrift IDL editing and fo
 - a VS Code extension with syntax highlighting and LSP integration
 
 The project will be implemented primarily in Go and designed around a reusable syntax/formatting engine. Parsing will use a `tree-sitter` grammar (for incremental, error-tolerant parsing suitable for LSP) plus a custom lossless lexer/token-trivia layer (for formatter fidelity).
+
+The public product name is **Weaver for Apache Thift**. Repository and module identifiers remain `thrift-weaver`.
 
 ## Motivation
 
@@ -31,23 +33,23 @@ Building a dedicated tooling project allows:
 - lossless parsing/trivia preservation for formatting
 - error-tolerant incremental parsing for editors
 - a cleaner Go-based developer experience
-- independent release cadence from the Thrift compiler
+- independent release cadence from the Apache Thrift compiler
 
 ## Goals
 
-- Provide a deterministic, idempotent Thrift formatter (`thriftfmt`)
-- Provide a Thrift linter CLI (`thriftlint`) that reuses parser diagnostics and lint rules
+- Provide a deterministic, idempotent Apache Thrift formatter (`thriftfmt`)
+- Provide an Apache Thrift linter CLI (`thriftlint`) that reuses parser diagnostics and lint rules
 - Provide baseline structural lint rules for duplicate explicit field IDs, duplicate field names, and other deprecated/unsafe constructs detectable within a single document
 - Provide bounded single-document semantic diagnostics for locally resolvable type and service constraints without requiring workspace indexing
 - Provide a production-quality LSP server (`thriftls`) for editors
 - Provide a VS Code extension with syntax highlighting and LSP client integration
 - Preserve comments and syntax fidelity where formatter policy permits
 - Support invalid/incomplete code in editor workflows
-- Validate formatted output compatibility against the official Thrift compiler in CI
+- Validate formatted output compatibility against the official Apache Thrift compiler in CI
 
 ## Non-Goals (Initial Scope)
 
-- Replacing the official Thrift compiler
+- Replacing the official Apache Thrift compiler
 - Whole-program semantic type checking, include-graph resolution, and cross-file indexing in v1
 - Cross-file indexing, go-to-definition, rename in v1
 - A perfect source-preserving rewriter (formatter may normalize whitespace and selected style choices)
@@ -763,7 +765,7 @@ Normative rules:
 
 The `tree-sitter` grammar must support:
 
-- current Thrift syntax
+- current Apache Thrift syntax
 - common deprecated syntax forms tolerated in practice (as parseable nodes/tokens)
 - error recovery around top-level declarations and container/literal boundaries
 
@@ -985,7 +987,7 @@ These are non-binding v1 targets but required for beta sign-off.
 
 Measurement rules (required for beta sign-off):
 
-- Publish benchmark corpus definitions (at least: small, typical, large Thrift files; malformed-file set).
+- Publish benchmark corpus definitions (at least: small, typical, large Apache Thrift files; malformed-file set).
 - Record hardware/OS baseline for reported numbers in CI or release notes.
 - Report p50/p95 latency for parse and format benchmarks.
 - Track steady-state RSS (or equivalent process memory metric) during repeated LSP open/change/close test loops.
@@ -1015,7 +1017,7 @@ Measurement rules (required for beta sign-off):
 
 ### 4. Compatibility Oracle Tests
 
-- Validate formatted output parses with official Thrift compiler (`thrift`)
+- Validate formatted output parses with the official Apache Thrift compiler (`thrift`)
 - CI job should fail if formatter emits syntax not accepted by official compiler
 
 Version pinning requirement:
