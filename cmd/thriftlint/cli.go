@@ -64,6 +64,7 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []
 		writef(stderr, "thriftlint: parse failed: %v\n", err)
 		return exitInternal
 	}
+	defer tree.Close()
 
 	diags, err := collectDiagnostics(ctx, tree)
 	if err != nil {

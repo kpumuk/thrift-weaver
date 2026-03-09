@@ -53,6 +53,7 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []
 		writef(stderr, "thriftfmt: parse failed: %v\n", err)
 		return exitInternal
 	}
+	defer tree.Close()
 
 	if opts.debugTokens {
 		dumpTokens(stdout, tree)

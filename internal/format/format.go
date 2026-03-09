@@ -77,6 +77,7 @@ func Source(ctx context.Context, src []byte, uri string, opts Options) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
+	defer tree.Close()
 	return Document(ctx, tree, opts)
 }
 
