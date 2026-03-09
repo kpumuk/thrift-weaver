@@ -7,6 +7,7 @@ on:
   pull_request:
 
 permissions:
+  actions: write
   contents: read
 
 env:
@@ -214,10 +215,78 @@ jobs:
       - name: Install pinned tools
         run: mise install
 
-      - name: Run performance gate
-        run: mise run perf-gate
+      - name: Restore previous perf state
+        if: github.event_name == 'push'
+        uses: actions/cache/restore@v4
+        with:
+          path: .tmp/perf-gate-state.env
+          key: perf-gate-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            perf-gate-${{ github.ref_name }}-
+
+      - name: Generate performance report
+        run: |
+          mkdir -p .tmp
+          go run ./scripts/perf-report \
+            --iterations 10 \
+            --warmup 2 \
+            --memory-iterations 200 \
+            --memory-sample-every 20 \
+            --json .tmp/perf-report.json
+
+      - name: Evaluate current performance gate
+        id: current-perf
+        shell: bash
+        run: |
+          set -euo pipefail
+          message_file=.tmp/perf-gate-message.txt
+          if go run ./scripts/check-perf-gate --json .tmp/perf-report.json >"$message_file" 2>&1; then
+            echo "current-breach=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "current-breach=true" >>"$GITHUB_OUTPUT"
+          fi
+          cat "$message_file"
+
+      - name: Read previous perf state
+        id: previous-perf
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_known=false
+          previous_breach=false
+          if [[ -f .tmp/perf-gate-state.env ]]; then
+            # shellcheck disable=SC1091
+            source .tmp/perf-gate-state.env
+            previous_known=true
+            previous_breach="${PERF_GATE_BREACH:-false}"
+          fi
+          echo "previous-known=$previous_known" >>"$GITHUB_OUTPUT"
+          echo "previous-breach=$previous_breach" >>"$GITHUB_OUTPUT"
+
+      - name: Persist current perf state
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .tmp
+          printf 'PERF_GATE_BREACH=%s\n' "${{ steps.current-perf.outputs.current-breach }}" > .tmp/perf-gate-state.env
+
+      - name: Save current perf state
+        if: github.event_name == 'push' && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .tmp/perf-gate-state.env
+          key: perf-gate-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Enforce perf policy
+        run: |
+          go run ./scripts/evaluate-perf-policy \
+            --event-name "${{ github.event_name }}" \
+            --current-breach="${{ steps.current-perf.outputs.current-breach }}" \
+            --previous-known="${{ steps.previous-perf.outputs.previous-known }}" \
+            --previous-breach="${{ steps.previous-perf.outputs.previous-breach }}"
 
       - name: Upload perf gate report
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: perf-gate-report

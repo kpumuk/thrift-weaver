@@ -114,3 +114,12 @@ When reporting numbers (release notes / beta sign-off):
 - `small`, `typical`, and `large` are benchmark buckets, not product limits.
 - `malformed` parse timings help monitor recovery-path performance regressions.
 - The memory loop uses full-document replacement changes in v1 to avoid brittle offset assumptions while still exercising parser/store churn.
+
+## CI Gate Policy
+
+CI enforces the performance report in two layers:
+
+- pull requests fail immediately on any current-run SLA breach
+- push builds record branch-local perf state and fail when the SLA breach repeats on the next push
+
+This keeps PR regressions loud while reducing false-positive blocking from one-off noise on branch pushes.
