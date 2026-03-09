@@ -26,9 +26,7 @@ func (FieldIDRequiredRule) Description() string {
 
 // Run evaluates the rule against a syntax tree.
 func (FieldIDRequiredRule) Run(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagnostic, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -38,7 +36,7 @@ func (FieldIDRequiredRule) Run(ctx context.Context, tree *syntax.Tree) ([]syntax
 		if kind != "field" {
 			return
 		}
-		if hasAnyNodeFlag(n.Flags, syntax.NodeFlagError|syntax.NodeFlagMissing|syntax.NodeFlagRecovered) {
+		if hasErrorFlags(n.Flags) {
 			return
 		}
 		if hasChildByKind(tree, n.ID, "field_id") {
@@ -49,13 +47,11 @@ func (FieldIDRequiredRule) Run(ctx context.Context, tree *syntax.Tree) ([]syntax
 		if !span.IsValid() {
 			span = n.Span
 		}
-		out = append(out, syntax.Diagnostic{
-			Code:        DiagnosticFieldIDRequired,
-			Message:     "field is missing an explicit field id (for example: `1:`)",
-			Severity:    syntax.SeverityWarning,
-			Span:        span,
-			Recoverable: true,
-		})
+		out = append(out, newRecoverableWarning(
+			DiagnosticFieldIDRequired,
+			"field is missing an explicit field id (for example: `1:`)",
+			span,
+		))
 	})
 	return out, nil
 }

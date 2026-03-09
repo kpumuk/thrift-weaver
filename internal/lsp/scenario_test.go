@@ -57,7 +57,7 @@ func TestLSPScenarioInitializeOpenChangeFormat(t *testing.T) {
 		t.Fatalf("initialize error: %+v", initResp.Error)
 	}
 
-	diagNotifications := collectMethodMessages(t, msgs, "textDocument/publishDiagnostics")
+	diagNotifications := collectPublishDiagnosticsMessages(t, msgs)
 	if len(diagNotifications) != 2 {
 		t.Fatalf("publishDiagnostics count=%d, want 2", len(diagNotifications))
 	}

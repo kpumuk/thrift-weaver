@@ -30,8 +30,7 @@ type Runner struct {
 
 // NewRunner builds a lint runner from a rule set.
 func NewRunner(rules ...Rule) *Runner {
-	copied := slices.Clone(rules)
-	return &Runner{rules: copied}
+	return &Runner{rules: slices.Clone(rules)}
 }
 
 // NewDefaultRunner builds the default lint rule set.
@@ -39,6 +38,9 @@ func NewDefaultRunner() *Runner {
 	return NewRunner(
 		FieldIDRequiredRule{},
 		DeprecatedFieldModifiersRule{},
+		DeprecatedXSDAllRule{},
+		UnionFieldRequirednessRule{},
+		NegativeEnumValueRule{},
 	)
 }
 
@@ -47,9 +49,7 @@ func (r *Runner) Run(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagnosti
 	if tree == nil {
 		return nil, errors.New("nil syntax tree")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

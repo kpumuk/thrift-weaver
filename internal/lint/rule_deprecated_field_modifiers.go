@@ -56,9 +56,7 @@ func (DeprecatedFieldModifiersRule) Description() string {
 
 // Run evaluates the rule against a syntax tree.
 func (DeprecatedFieldModifiersRule) Run(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagnostic, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -68,7 +66,7 @@ func (DeprecatedFieldModifiersRule) Run(ctx context.Context, tree *syntax.Tree) 
 		if kind != "field" {
 			return
 		}
-		if hasAnyNodeFlag(n.Flags, syntax.NodeFlagError|syntax.NodeFlagMissing|syntax.NodeFlagRecovered) {
+		if hasErrorFlags(n.Flags) {
 			return
 		}
 
@@ -81,13 +79,7 @@ func (DeprecatedFieldModifiersRule) Run(ctx context.Context, tree *syntax.Tree) 
 			if !ok {
 				continue
 			}
-			out = append(out, syntax.Diagnostic{
-				Code:        code,
-				Message:     message,
-				Severity:    syntax.SeverityWarning,
-				Span:        child.Span,
-				Recoverable: true,
-			})
+			out = append(out, newRecoverableWarning(code, message, child.Span))
 		}
 	})
 	return out, nil

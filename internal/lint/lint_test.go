@@ -64,12 +64,92 @@ struct S {
 	}
 }
 
+func TestDeprecatedXSDAllRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+struct Legacy xsd_all {
+  1: string value,
+}
+
+union Choice xsd_all {
+  1: string name,
+}
+`)
+
+	diags, err := DeprecatedXSDAllRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 2 {
+		t.Fatalf("diagnostic count=%d, want 2", len(diags))
+	}
+	for _, d := range diags {
+		if d.Code != DiagnosticDeprecatedXSDAll {
+			t.Fatalf("unexpected diagnostic code: %+v", d)
+		}
+	}
+}
+
+func TestUnionFieldRequirednessRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+union Choice {
+  1: required string name,
+  2: optional string title,
+  3: string nickname,
+}
+`)
+
+	diags, err := UnionFieldRequirednessRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("diagnostic count=%d, want 1", len(diags))
+	}
+	if diags[0].Code != DiagnosticUnionFieldRequired {
+		t.Fatalf("unexpected diagnostic code: %+v", diags[0])
+	}
+}
+
+func TestNegativeEnumValueRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+enum Result {
+  OK = 1,
+  BAD = -1,
+}
+`)
+
+	diags, err := NegativeEnumValueRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("diagnostic count=%d, want 1", len(diags))
+	}
+	if diags[0].Code != DiagnosticNegativeEnumValue {
+		t.Fatalf("unexpected diagnostic code: %+v", diags[0])
+	}
+}
+
 func TestDefaultRunnerIncludesSourceAndAggregatesRules(t *testing.T) {
 	t.Parallel()
 
 	tree := mustParseTree(t, `
 struct S {
   string name xsd_optional,
+}
+
+union Choice xsd_all {
+  1: required string value,
+}
+
+enum Result {
+  BAD = -1,
 }
 `)
 
@@ -78,14 +158,23 @@ struct S {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(diags) != 2 {
-		t.Fatalf("diagnostic count=%d, want 2", len(diags))
+	if len(diags) != 5 {
+		t.Fatalf("diagnostic count=%d, want 5", len(diags))
 	}
 	if !hasCode(diags, DiagnosticFieldIDRequired) {
 		t.Fatalf("missing %s in %+v", DiagnosticFieldIDRequired, diags)
 	}
 	if !hasCode(diags, DiagnosticDeprecatedFieldXSDOptional) {
 		t.Fatalf("missing %s in %+v", DiagnosticDeprecatedFieldXSDOptional, diags)
+	}
+	if !hasCode(diags, DiagnosticDeprecatedXSDAll) {
+		t.Fatalf("missing %s in %+v", DiagnosticDeprecatedXSDAll, diags)
+	}
+	if !hasCode(diags, DiagnosticUnionFieldRequired) {
+		t.Fatalf("missing %s in %+v", DiagnosticUnionFieldRequired, diags)
+	}
+	if !hasCode(diags, DiagnosticNegativeEnumValue) {
+		t.Fatalf("missing %s in %+v", DiagnosticNegativeEnumValue, diags)
 	}
 	for _, d := range diags {
 		if d.Source != DiagnosticSource {

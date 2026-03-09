@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	fmtengine "github.com/kpumuk/thrift-weaver/internal/format"
 	"github.com/kpumuk/thrift-weaver/internal/lint"
@@ -25,11 +26,27 @@ type Server struct {
 	mu            sync.Mutex
 	shutdown      bool
 	exitRequested bool
+	output        io.Writer
+	runCtx        context.Context
+
+	writeMu sync.Mutex
 
 	reqMu            sync.Mutex
 	requestCancels   map[string]context.CancelFunc
 	pendingCancelled map[string]struct{}
+
+	lintMu       sync.Mutex
+	lintDebounce time.Duration
+	lintJobs     map[string]lintJobState
+	lintWG       sync.WaitGroup
 }
+
+type lintJobState struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+const defaultLintDebounce = 150 * time.Millisecond
 
 // NewServer creates a new LSP server instance.
 func NewServer() *Server {
@@ -38,6 +55,8 @@ func NewServer() *Server {
 		lint:             lint.NewDefaultRunner(),
 		requestCancels:   make(map[string]context.CancelFunc),
 		pendingCancelled: make(map[string]struct{}),
+		lintDebounce:     defaultLintDebounce,
+		lintJobs:         make(map[string]lintJobState),
 	}
 }
 
@@ -57,11 +76,19 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.attachRuntime(runCtx, out)
+	defer func() {
+		s.cancelAllLintJobs()
+		s.lintWG.Wait()
+		s.detachRuntime()
+	}()
+
 	br := bufio.NewReader(in)
-	bw := bufio.NewWriter(out)
 
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := runCtx.Err(); err != nil {
 			return err
 		}
 		body, err := readFramedMessage(br)
@@ -69,8 +96,7 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			_ = s.writeErrorResponse(bw, nil, jsonRPCParseError, err.Error())
-			_ = bw.Flush()
+			_ = s.writeErrorResponse(nil, jsonRPCParseError, err.Error())
 			continue
 		}
 		if len(body) == 0 {
@@ -79,13 +105,11 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 
 		var req Request
 		if err := json.Unmarshal(body, &req); err != nil {
-			_ = s.writeErrorResponse(bw, nil, jsonRPCParseError, err.Error())
-			_ = bw.Flush()
+			_ = s.writeErrorResponse(nil, jsonRPCParseError, err.Error())
 			continue
 		}
 		if req.JSONRPC != "" && req.JSONRPC != JSONRPCVersion {
-			_ = s.writeErrorResponse(bw, req.ID, jsonRPCInvalidRequest, "unsupported jsonrpc version")
-			_ = bw.Flush()
+			_ = s.writeErrorResponse(req.ID, jsonRPCInvalidRequest, "unsupported jsonrpc version")
 			continue
 		}
 		if req.Method == "" {
@@ -93,20 +117,17 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 			continue
 		}
 
-		if err := s.dispatch(ctx, bw, req); err != nil {
+		if err := s.dispatch(runCtx, req); err != nil {
 			if errors.Is(err, ErrShutdownRequested) {
 				return nil
 			}
-			return err
-		}
-		if err := bw.Flush(); err != nil {
 			return err
 		}
 	}
 }
 
 //nolint:funcorder // dispatch is kept near Run for readability of request flow.
-func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) error {
+func (s *Server) dispatch(ctx context.Context, req Request) error {
 	isRequest := len(req.ID) != 0
 	if isRequest {
 		var cancel context.CancelFunc
@@ -119,13 +140,13 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		if !isRequest {
 			return nil
 		}
-		return s.writeResponse(w, Response{JSONRPC: JSONRPCVersion, ID: req.ID, Result: result})
+		return s.writeResponse(Response{JSONRPC: JSONRPCVersion, ID: req.ID, Result: result})
 	}
 	writeErr := func(code int, msg string) error {
 		if !isRequest {
 			return nil
 		}
-		return s.writeErrorResponse(w, req.ID, code, msg)
+		return s.writeErrorResponse(req.ID, code, msg)
 	}
 
 	switch req.Method {
@@ -164,7 +185,8 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		if err := s.DidOpen(ctx, p); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
-		if err := s.publishDiagnosticsForURI(ctx, w, p.TextDocument.URI); err != nil {
+		s.invalidateLintJob(p.TextDocument.URI)
+		if err := s.publishDiagnosticsForURI(ctx, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		return nil
@@ -185,9 +207,10 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 			}
 			return writeErr(code, err.Error())
 		}
-		if err := s.publishDiagnosticsForURI(ctx, w, p.TextDocument.URI); err != nil {
+		if err := s.publishSyntaxDiagnosticsForURI(p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
+		s.scheduleLintPublish(p.TextDocument.URI, p.TextDocument.Version)
 		return nil
 	case "textDocument/didSave":
 		var p DidSaveParams
@@ -197,7 +220,8 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		if err := s.DidSave(ctx, p); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
-		if err := s.publishDiagnosticsForURI(ctx, w, p.TextDocument.URI); err != nil {
+		s.invalidateLintJob(p.TextDocument.URI)
+		if err := s.publishDiagnosticsForURI(ctx, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		return nil
@@ -209,7 +233,8 @@ func (s *Server) dispatch(ctx context.Context, w *bufio.Writer, req Request) err
 		if err := s.DidClose(ctx, p); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
-		if err := s.publishClearedDiagnostics(w, p.TextDocument.URI); err != nil {
+		s.invalidateLintJob(p.TextDocument.URI)
+		if err := s.publishClearedDiagnostics(p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		return nil
@@ -385,16 +410,16 @@ func (s *Server) RangeFormatting(ctx context.Context, p DocumentRangeFormattingP
 	return lspTextEditsFromByteEdits(snap.Tree.LineIndex, res.Edits)
 }
 
-func (s *Server) writeResponse(w *bufio.Writer, resp Response) error {
+func (s *Server) writeResponse(resp Response) error {
 	body, err := json.Marshal(resp)
 	if err != nil {
 		return err
 	}
-	return writeFramedMessage(w, body)
+	return s.writeMessage(body)
 }
 
-func (s *Server) writeErrorResponse(w *bufio.Writer, id json.RawMessage, code int, msg string) error {
-	return s.writeResponse(w, Response{
+func (s *Server) writeErrorResponse(id json.RawMessage, code int, msg string) error {
+	return s.writeResponse(Response{
 		JSONRPC: JSONRPCVersion,
 		ID:      id,
 		Error:   &ResponseError{Code: code, Message: msg},
@@ -406,6 +431,15 @@ func (s *Server) requireStore() (*SnapshotStore, error) {
 		return nil, errors.New("nil Server")
 	}
 	return s.store, nil
+}
+
+func (s *Server) latestSnapshot(uri string) (*Snapshot, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, err
+	}
+	snap, _ := store.Snapshot(uri)
+	return snap, nil
 }
 
 func (s *Server) formattingSnapshot(uri string, version *int32) (*Snapshot, error) {
@@ -423,29 +457,35 @@ func (s *Server) formattingSnapshot(uri string, version *int32) (*Snapshot, erro
 	return snap, nil
 }
 
-func (s *Server) publishDiagnosticsForURI(ctx context.Context, w *bufio.Writer, uri string) error {
-	store, err := s.requireStore()
+func (s *Server) publishDiagnosticsForURI(ctx context.Context, uri string) error {
+	snap, err := s.latestSnapshot(uri)
 	if err != nil {
 		return err
 	}
-	snap, ok := store.Snapshot(uri)
-	if !ok {
+	if snap == nil {
 		return nil
 	}
 	diags, err := s.collectLSPDiagnostics(ctx, snap.Tree)
 	if err != nil {
 		return err
 	}
-	version := snap.Version
-	latest, ok := store.Snapshot(uri)
-	if !ok || latest.Version != version {
+	return s.writeVersionedDiagnostics(uri, snap.Version, diags)
+}
+
+func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if snap == nil {
 		return nil
 	}
-	return s.writeNotification(w, "textDocument/publishDiagnostics", PublishDiagnosticsParams{
-		URI:         uri,
-		Version:     &version,
-		Diagnostics: diags,
-	})
+
+	diags, err := lspDiagnosticsFromSyntax(snap.Tree, slices.Clone(snap.Tree.Diagnostics))
+	if err != nil {
+		return err
+	}
+	return s.writeVersionedDiagnostics(uri, snap.Version, diags)
 }
 
 func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) ([]Diagnostic, error) {
@@ -467,27 +507,220 @@ func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) (
 	return lspDiagnosticsFromSyntax(tree, combined)
 }
 
-func (s *Server) publishClearedDiagnostics(w *bufio.Writer, uri string) error {
-	return s.writeNotification(w, "textDocument/publishDiagnostics", PublishDiagnosticsParams{
+func (s *Server) publishClearedDiagnostics(uri string) error {
+	return s.writePublishDiagnostics(PublishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: []Diagnostic{},
 	})
 }
 
-func (s *Server) writeNotification(w *bufio.Writer, method string, params any) error {
+func (s *Server) writePublishDiagnostics(params PublishDiagnosticsParams) error {
 	body, err := json.Marshal(struct {
 		JSONRPC string `json:"jsonrpc"`
 		Method  string `json:"method"`
 		Params  any    `json:"params,omitempty"`
 	}{
 		JSONRPC: JSONRPCVersion,
-		Method:  method,
+		Method:  "textDocument/publishDiagnostics",
 		Params:  params,
 	})
 	if err != nil {
 		return err
 	}
-	return writeFramedMessage(w, body)
+	return s.writeMessage(body)
+}
+
+func (s *Server) writeVersionedDiagnostics(uri string, version int32, diags []Diagnostic) error {
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if snap == nil || snap.Version != version {
+		return nil
+	}
+
+	return s.writePublishDiagnostics(PublishDiagnosticsParams{
+		URI:         uri,
+		Version:     &version,
+		Diagnostics: diags,
+	})
+}
+
+func (s *Server) writeMessage(body []byte) error {
+	if s == nil {
+		return errors.New("nil Server")
+	}
+	s.mu.Lock()
+	out := s.output
+	s.mu.Unlock()
+	if out == nil {
+		return errors.New("lsp output is not attached")
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return writeFramedMessage(out, body)
+}
+
+func (s *Server) attachRuntime(ctx context.Context, out io.Writer) {
+	s.mu.Lock()
+	s.runCtx = ctx
+	s.output = out
+	s.mu.Unlock()
+}
+
+func (s *Server) detachRuntime() {
+	s.mu.Lock()
+	s.runCtx = nil
+	s.output = nil
+	s.mu.Unlock()
+}
+
+func (s *Server) runtimeContext() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runCtx
+}
+
+func (s *Server) scheduleLintPublish(uri string, version int32) {
+	if s == nil || s.lint == nil || uri == "" {
+		return
+	}
+
+	runCtx := s.runtimeContext()
+	if runCtx == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(runCtx)
+
+	s.lintMu.Lock()
+	state := s.lintJobs[uri]
+	if state.cancel != nil {
+		state.cancel()
+	}
+	state.gen++
+	state.cancel = cancel
+	gen := state.gen
+	s.lintJobs[uri] = state
+	debounce := s.lintDebounce
+	s.lintWG.Add(1)
+	s.lintMu.Unlock()
+
+	go func() {
+		defer s.lintWG.Done()
+		defer s.finishLintJob(uri, gen)
+
+		timer := time.NewTimer(debounce)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		if !s.isLintJobCurrent(uri, gen) {
+			return
+		}
+		_ = s.publishDebouncedLintDiagnostics(ctx, uri, version, gen)
+	}()
+}
+
+func (s *Server) publishDebouncedLintDiagnostics(ctx context.Context, uri string, version int32, gen uint64) error {
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if snap == nil || snap.Version != version {
+		return nil
+	}
+
+	diags, err := s.collectLSPDiagnostics(ctx, snap.Tree)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !s.isLintJobCurrent(uri, gen) {
+		return nil
+	}
+	return s.writeVersionedDiagnostics(uri, version, diags)
+}
+
+func (s *Server) invalidateLintJob(uri string) {
+	if s == nil || uri == "" {
+		return
+	}
+
+	s.lintMu.Lock()
+	defer s.lintMu.Unlock()
+
+	state := s.lintJobs[uri]
+	if state.cancel != nil {
+		state.cancel()
+	}
+	state.gen++
+	state.cancel = nil
+	s.lintJobs[uri] = state
+}
+
+func (s *Server) finishLintJob(uri string, gen uint64) {
+	if s == nil || uri == "" {
+		return
+	}
+
+	s.lintMu.Lock()
+	defer s.lintMu.Unlock()
+
+	state, ok := s.lintJobs[uri]
+	if !ok || state.gen != gen {
+		return
+	}
+	state.cancel = nil
+	s.lintJobs[uri] = state
+}
+
+func (s *Server) isLintJobCurrent(uri string, gen uint64) bool {
+	if s == nil || uri == "" {
+		return false
+	}
+
+	s.lintMu.Lock()
+	defer s.lintMu.Unlock()
+
+	state, ok := s.lintJobs[uri]
+	return ok && state.gen == gen
+}
+
+func (s *Server) cancelAllLintJobs() {
+	if s == nil {
+		return
+	}
+
+	s.lintMu.Lock()
+	defer s.lintMu.Unlock()
+
+	for uri, state := range s.lintJobs {
+		if state.cancel != nil {
+			state.cancel()
+		}
+		state.cancel = nil
+		s.lintJobs[uri] = state
+	}
+}
+
+func (s *Server) setLintDebounceForTesting(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	s.lintMu.Lock()
+	s.lintDebounce = d
+	s.lintMu.Unlock()
 }
 
 // cancelRequest records or triggers cancellation for a request id.
