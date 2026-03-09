@@ -127,6 +127,10 @@ thriftlint --format json path/to/file.thrift
 - explicit field IDs are required
 - explicit field IDs must be unique within the same containing field list
 - field names must be unique within the same containing field list
+- unqualified local type references must resolve, including typedef base types and container inner types
+- `oneway` functions must return `void` and must not declare `throws`
+- unqualified local `throws` types must resolve to exceptions
+- unqualified local `service extends` targets must resolve to services
 - deprecated field modifiers: `xsd_optional`, `xsd_nillable`, `xsd_attrs`
 - deprecated struct/exception `xsd_all`
 - `required` fields are rejected inside `union`
@@ -193,6 +197,7 @@ Changed-range lint:
 - `thriftls` uses a single embedded wasm parser backend
 - there is no supported backend toggle
 - no user-configurable lint rule toggles or parser timeout knobs are exposed yet
+- semantic lint currently resolves only unqualified names declared in the current document; dotted include-qualified references are skipped until cross-file indexing exists
 - parser cancellation/time limits currently follow the request context; there is no separate configurable hard timeout inside the server
 
 For backend troubleshooting and breaker behavior, see [WASM Runtime and Troubleshooting](/Users/dmytro/work/github/thrift-weaver/docs/wasm-runtime.md).

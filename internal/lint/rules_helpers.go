@@ -2,6 +2,7 @@ package lint
 
 import (
 	"context"
+	"strings"
 
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
@@ -137,6 +138,50 @@ func firstChildSpanByKind(tree *syntax.Tree, parent syntax.NodeID, want string) 
 		return child.Span
 	}
 	return invalidSpan
+}
+
+func firstChildNodeIDByKind(tree *syntax.Tree, parent syntax.NodeID, want string) (syntax.NodeID, bool) {
+	for _, id := range tree.ChildNodeIDs(parent) {
+		child := tree.NodeByID(id)
+		if child == nil || syntax.KindName(child.Kind) != want {
+			continue
+		}
+		return id, true
+	}
+	return syntax.NoNode, false
+}
+
+func firstChildTextByKind(tree *syntax.Tree, parent syntax.NodeID, want string) string {
+	return strings.TrimSpace(textForSpan(tree.Source, firstChildSpanByKind(tree, parent, want)))
+}
+
+func firstDirectTypeChildNodeID(tree *syntax.Tree, parent syntax.NodeID) (syntax.NodeID, bool) {
+	for _, id := range tree.ChildNodeIDs(parent) {
+		if !isTypeNodeKind(tree, id) {
+			continue
+		}
+		return id, true
+	}
+	return syntax.NoNode, false
+}
+
+func unwrapTypeNodeID(tree *syntax.Tree, nodeID syntax.NodeID) (syntax.NodeID, bool) {
+	current := nodeID
+	for {
+		n := tree.NodeByID(current)
+		if n == nil {
+			return syntax.NoNode, false
+		}
+		kind := syntax.KindName(n.Kind)
+		if kind != "type" && kind != "return_type" {
+			return current, true
+		}
+		childID, ok := firstDirectTypeChildNodeID(tree, current)
+		if !ok {
+			return syntax.NoNode, false
+		}
+		current = childID
+	}
 }
 
 func textForSpan(src []byte, sp itext.Span) string {

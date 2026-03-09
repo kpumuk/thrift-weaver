@@ -101,6 +101,117 @@ service API {
 	}
 }
 
+func TestUnknownTypeRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+struct Known {}
+typedef Known Alias
+
+const Missing BAD = 1
+
+struct S {
+  1: Missing one,
+  2: list<Missing> many,
+  3: map<string, Missing> dict,
+  4: shared.Remote remote,
+  5: Alias ok,
+}
+
+service API {
+  Known ping(1: Missing req, 2: shared.Remote remote),
+}
+`)
+
+	diags, err := UnknownTypeRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 5 {
+		t.Fatalf("diagnostic count=%d, want 5", len(diags))
+	}
+	for _, d := range diags {
+		if d.Code != DiagnosticTypeUnknown {
+			t.Fatalf("unexpected diagnostic code: %+v", d)
+		}
+		if d.Severity != syntax.SeverityError {
+			t.Fatalf("diagnostic severity=%v, want %v", d.Severity, syntax.SeverityError)
+		}
+	}
+}
+
+func TestTypedefUnknownBaseRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+struct Known {}
+
+typedef Missing MissingAlias
+typedef list<Missing> MissingList
+typedef shared.Remote RemoteAlias
+typedef Known KnownAlias
+`)
+
+	diags, err := TypedefUnknownBaseRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 2 {
+		t.Fatalf("diagnostic count=%d, want 2", len(diags))
+	}
+	for _, d := range diags {
+		if d.Code != DiagnosticTypedefUnknownBase {
+			t.Fatalf("unexpected diagnostic code: %+v", d)
+		}
+		if d.Severity != syntax.SeverityError {
+			t.Fatalf("diagnostic severity=%v, want %v", d.Severity, syntax.SeverityError)
+		}
+	}
+}
+
+func TestServiceSemanticsRule(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+struct NotService {}
+exception Boom {}
+service Base {}
+
+service API extends Missing {
+  oneway i32 ping(1: string req) throws (1: Missing first, 2: NotService second, 3: Boom ok, 4: shared.Remote remote),
+}
+
+service Child extends NotService {}
+service Remote extends shared.Base {}
+`)
+
+	diags, err := ServiceSemanticsRule{}.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(diags) != 6 {
+		t.Fatalf("diagnostic count=%d, want 6", len(diags))
+	}
+	if !hasCode(diags, DiagnosticServiceExtendsUnknown) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceExtendsUnknown, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceOnewayReturnNotVoid) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceOnewayReturnNotVoid, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceOnewayHasThrows) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceOnewayHasThrows, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceThrowsUnknown) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceThrowsUnknown, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceThrowsNotException) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceThrowsNotException, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceExtendsNotService) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceExtendsNotService, diags)
+	}
+}
+
 func TestDeprecatedFieldModifiersRule(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +361,47 @@ enum Result {
 	}
 	if !hasCode(diags, DiagnosticNegativeEnumValue) {
 		t.Fatalf("missing %s in %+v", DiagnosticNegativeEnumValue, diags)
+	}
+	for _, d := range diags {
+		if d.Source != DiagnosticSource {
+			t.Fatalf("diagnostic source=%q, want %q", d.Source, DiagnosticSource)
+		}
+	}
+}
+
+func TestDefaultRunnerIncludesSemanticRules(t *testing.T) {
+	t.Parallel()
+
+	tree := mustParseTree(t, `
+typedef Missing Alias
+
+service API extends MissingService {
+  oneway i32 ping(1: Missing req) throws (1: string msg),
+}
+`)
+
+	runner := NewDefaultRunner()
+	diags, err := runner.Run(context.Background(), tree)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !hasCode(diags, DiagnosticTypedefUnknownBase) {
+		t.Fatalf("missing %s in %+v", DiagnosticTypedefUnknownBase, diags)
+	}
+	if !hasCode(diags, DiagnosticTypeUnknown) {
+		t.Fatalf("missing %s in %+v", DiagnosticTypeUnknown, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceExtendsUnknown) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceExtendsUnknown, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceOnewayReturnNotVoid) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceOnewayReturnNotVoid, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceOnewayHasThrows) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceOnewayHasThrows, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceThrowsNotException) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceThrowsNotException, diags)
 	}
 	for _, d := range diags {
 		if d.Source != DiagnosticSource {

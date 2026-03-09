@@ -155,6 +155,10 @@ Current built-in lint rules:
 - explicit field IDs required
 - explicit field IDs unique within the same containing field list
 - field names unique within the same containing field list
+- unqualified local type references must resolve, including typedef base types and container inner types
+- `oneway` functions must return `void` and must not declare `throws`
+- unqualified local `throws` types must resolve to exceptions
+- unqualified local `service extends` targets must resolve to services
 - deprecated field `xsd_optional`
 - deprecated field `xsd_nillable`
 - deprecated field `xsd_attrs`
@@ -166,6 +170,7 @@ Runtime notes:
 
 - `didChange` uses incremental reparsing when edit eligibility checks pass; otherwise it falls back to a full reparse for that version.
 - Lint on change is currently full-file only. Changed-range lint is experimental and not enabled in the normative path.
+- Semantic lint currently resolves only unqualified names declared in the current document. Dotted include-qualified references are skipped until cross-file indexing exists.
 - There is no parser backend toggle. The supported runtime path is the embedded wasm parser.
 
 ## VS Code Extension

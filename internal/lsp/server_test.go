@@ -236,6 +236,60 @@ func TestServerRunPublishesLintDiagnosticsOnOpenChangeSave(t *testing.T) {
 	}
 }
 
+func TestServerRunPublishesSemanticLintDiagnosticsOnOpen(t *testing.T) {
+	t.Parallel()
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{
+				URI:     "file:///semantic.thrift",
+				Version: 1,
+				Text: "typedef Missing Alias\n" +
+					"service API extends MissingService {\n" +
+					"  oneway i32 ping(1: Missing req) throws (1: string msg),\n" +
+					"}\n",
+			},
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	notifications := collectPublishDiagnosticsMessages(t, readAllFrames(t, out.Bytes()))
+	if len(notifications) != 1 {
+		t.Fatalf("publishDiagnostics count=%d, want 1", len(notifications))
+	}
+
+	var openDiag PublishDiagnosticsParams
+	marshalRoundtrip(t, notifications[0].Params, &openDiag)
+	if openDiag.Version == nil || *openDiag.Version != 1 {
+		t.Fatalf("open diagnostics version=%v, want 1", openDiag.Version)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_TYPEDEF_UNKNOWN_BASE") {
+		t.Fatalf("expected LINT_TYPEDEF_UNKNOWN_BASE in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_TYPE_UNKNOWN") {
+		t.Fatalf("expected LINT_TYPE_UNKNOWN in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_SERVICE_ONEWAY_RETURN_NOT_VOID") {
+		t.Fatalf("expected LINT_SERVICE_ONEWAY_RETURN_NOT_VOID in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_SERVICE_ONEWAY_HAS_THROWS") {
+		t.Fatalf("expected LINT_SERVICE_ONEWAY_HAS_THROWS in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_SERVICE_EXTENDS_UNKNOWN") {
+		t.Fatalf("expected LINT_SERVICE_EXTENDS_UNKNOWN in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+	if !containsDiagnosticCode(openDiag.Diagnostics, "LINT_SERVICE_THROWS_NOT_EXCEPTION") {
+		t.Fatalf("expected LINT_SERVICE_THROWS_NOT_EXCEPTION in open diagnostics: %+v", openDiag.Diagnostics)
+	}
+}
+
 func TestServerRunPublishesDebouncedLintDiagnosticsAfterDidChange(t *testing.T) {
 	t.Parallel()
 
