@@ -53,11 +53,14 @@ type InitializeResult struct {
 // ServerCapabilities declares supported LSP features.
 type ServerCapabilities struct {
 	TextDocumentSync                TextDocumentSyncOptions `json:"textDocumentSync"`
+	DefinitionProvider              bool                    `json:"definitionProvider,omitempty"`
+	ReferencesProvider              bool                    `json:"referencesProvider,omitempty"`
 	DocumentFormattingProvider      bool                    `json:"documentFormattingProvider,omitempty"`
 	DocumentRangeFormattingProvider bool                    `json:"documentRangeFormattingProvider,omitempty"`
 	DocumentSymbolProvider          bool                    `json:"documentSymbolProvider,omitempty"`
 	FoldingRangeProvider            bool                    `json:"foldingRangeProvider,omitempty"`
 	SelectionRangeProvider          bool                    `json:"selectionRangeProvider,omitempty"`
+	WorkspaceSymbolProvider         bool                    `json:"workspaceSymbolProvider,omitempty"`
 	SemanticTokensProvider          *SemanticTokensOptions  `json:"semanticTokensProvider,omitempty"`
 }
 
@@ -167,6 +170,26 @@ type DocumentFormattingParams struct {
 	Options      FormattingOptions      `json:"options"`
 }
 
+// TextDocumentPositionParams identifies a document position request.
+type TextDocumentPositionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// DefinitionParams is the textDocument/definition request payload.
+type DefinitionParams = TextDocumentPositionParams
+
+// ReferenceContext configures reference lookup behavior.
+type ReferenceContext struct {
+	IncludeDeclaration bool `json:"includeDeclaration"`
+}
+
+// ReferenceParams is the textDocument/references request payload.
+type ReferenceParams struct {
+	TextDocumentPositionParams
+	Context ReferenceContext `json:"context"`
+}
+
 // DocumentRangeFormattingParams is the LSP range formatting request payload.
 type DocumentRangeFormattingParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
@@ -179,6 +202,25 @@ type DocumentRangeFormattingParams struct {
 type TextEdit struct {
 	Range   Range  `json:"range"`
 	NewText string `json:"newText"`
+}
+
+// Location is a minimal LSP location.
+type Location struct {
+	URI   string `json:"uri"`
+	Range Range  `json:"range"`
+}
+
+// WorkspaceSymbolParams is the workspace/symbol request payload.
+type WorkspaceSymbolParams struct {
+	Query string `json:"query"`
+}
+
+// SymbolInformation is a minimal workspace symbol result.
+type SymbolInformation struct {
+	Name          string   `json:"name"`
+	Kind          int      `json:"kind"`
+	Location      Location `json:"location"`
+	ContainerName string   `json:"containerName,omitempty"`
 }
 
 // DocumentSymbolParams identifies the target document for symbol requests.

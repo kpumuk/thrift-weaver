@@ -304,6 +304,26 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(lspErrorCodeForFormatting(err), err.Error())
 		}
 		return writeResp(edits)
+	case "textDocument/definition":
+		var p DefinitionParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		locations, err := s.Definition(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(locations)
+	case "textDocument/references":
+		var p ReferenceParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		locations, err := s.References(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(locations)
 	case "textDocument/documentSymbol":
 		var p DocumentSymbolParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -344,6 +364,16 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(tokens)
+	case "workspace/symbol":
+		var p WorkspaceSymbolParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		symbols, err := s.WorkspaceSymbols(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(symbols)
 	default:
 		return writeErr(jsonRPCMethodNotFound, "method not found")
 	}
@@ -1560,10 +1590,18 @@ func lspErrorCodeForFormatting(err error) int {
 }
 
 func lspErrorCodeForQuery(err error) int {
-	if errors.Is(err, context.Canceled) {
+	switch {
+	case errors.Is(err, context.Canceled):
 		return lspErrorRequestCancelled
+	case errors.Is(err, ErrDocumentNotOpen):
+		return jsonRPCInvalidParams
+	case errors.Is(err, index.ErrContentModified):
+		return lspErrorContentModified
+	case errors.Is(err, index.ErrWorkspaceClosed), errors.Is(err, index.ErrRenameBlocked):
+		return lspErrorRequestFailed
+	default:
+		return jsonRPCInternalError
 	}
-	return jsonRPCInternalError
 }
 
 func readFramedMessage(r *bufio.Reader) ([]byte, error) {

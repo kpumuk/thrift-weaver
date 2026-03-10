@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
@@ -34,6 +38,9 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	}
 	if got.TextDocumentSync.Save == nil || got.TextDocumentSync.Save.IncludeText {
 		t.Fatalf("unexpected didSave sync options: %+v", got.TextDocumentSync.Save)
+	}
+	if !got.DefinitionProvider || !got.ReferencesProvider || !got.WorkspaceSymbolProvider {
+		t.Fatalf("navigation capabilities not advertised: %+v", got)
 	}
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
 		t.Fatalf("unexpected capabilities: %+v", got)
@@ -702,6 +709,379 @@ func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T)
 	}
 }
 
+func TestServerRunNavigationQueries(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+	mainText := string(testutil.ReadFile(t, mainPath))
+	userPos := mustLSPPositionForSubstring(t, []byte(mainText), "types.User input")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`30`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`31`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`32`),
+		Method:  "textDocument/references",
+		Params: mustJSON(t, ReferenceParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     userPos,
+			},
+			Context: ReferenceContext{IncludeDeclaration: true},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`33`),
+		Method:  "workspace/symbol",
+		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "user"}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+
+	defResp := responseByID(t, msgs, "31")
+	if defResp.Error != nil {
+		t.Fatalf("definition error: %+v", defResp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, defResp.Result, &definitions)
+	if len(definitions) != 1 {
+		t.Fatalf("definition count=%d, want 1", len(definitions))
+	}
+	if definitions[0].URI != typesURI {
+		t.Fatalf("definition URI=%q, want %q", definitions[0].URI, typesURI)
+	}
+	if got := lspRangeText(t, definitions[0].URI, definitions[0].Range); got != "User" {
+		t.Fatalf("definition text=%q, want %q", got, "User")
+	}
+
+	refResp := responseByID(t, msgs, "32")
+	if refResp.Error != nil {
+		t.Fatalf("references error: %+v", refResp.Error)
+	}
+	var references []Location
+	marshalRoundtrip(t, refResp.Result, &references)
+	if len(references) != 3 {
+		t.Fatalf("references count=%d, want 3", len(references))
+	}
+	gotRefTexts := []string{
+		lspRangeText(t, references[0].URI, references[0].Range),
+		lspRangeText(t, references[1].URI, references[1].Range),
+		lspRangeText(t, references[2].URI, references[2].Range),
+	}
+	wantRefTexts := []string{"types.User", "types.User", "User"}
+	for i := range wantRefTexts {
+		if gotRefTexts[i] != wantRefTexts[i] {
+			t.Fatalf("reference %d text=%q, want %q", i, gotRefTexts[i], wantRefTexts[i])
+		}
+	}
+
+	symbolResp := responseByID(t, msgs, "33")
+	if symbolResp.Error != nil {
+		t.Fatalf("workspace/symbol error: %+v", symbolResp.Error)
+	}
+	var symbols []SymbolInformation
+	marshalRoundtrip(t, symbolResp.Result, &symbols)
+	if len(symbols) != 2 {
+		t.Fatalf("workspace symbol count=%d, want 2", len(symbols))
+	}
+	if symbols[0].Name != "User" || symbols[1].Name != "UserError" {
+		t.Fatalf("workspace symbols=%+v, want User and UserError", symbols)
+	}
+}
+
+func TestServerRunNavigationQueriesReturnEmptyForUnresolvedBinding(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "missing_include")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	refPos := mustLSPPositionForSubstring(t, []byte(mainText), "missing.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`40`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`41`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     refPos,
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`42`),
+		Method:  "textDocument/references",
+		Params: mustJSON(t, ReferenceParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     refPos,
+			},
+			Context: ReferenceContext{IncludeDeclaration: true},
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+	defResp := responseByID(t, msgs, "41")
+	if defResp.Error != nil {
+		t.Fatalf("definition error: %+v", defResp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, defResp.Result, &definitions)
+	if len(definitions) != 0 {
+		t.Fatalf("definition returned %+v, want empty", definitions)
+	}
+
+	refResp := responseByID(t, msgs, "42")
+	if refResp.Error != nil {
+		t.Fatalf("references error: %+v", refResp.Error)
+	}
+	var references []Location
+	marshalRoundtrip(t, refResp.Result, &references)
+	if len(references) != 0 {
+		t.Fatalf("references returned %+v, want empty", references)
+	}
+}
+
+func TestServerRunDefinitionUsesOpenShadowAndSymlinkURI(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "shadowing")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainText := string(testutil.ReadFile(t, mainPath))
+	shadowedShared := "\n\nstruct User {\n  1: string name,\n}\n"
+
+	linkPath := filepath.Join(root, "main-link.thrift")
+	if err := os.Symlink(mainPath, linkPath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	linkURI := rawFileURI(linkPath)
+	sharedURI := mustCanonicalURI(t, sharedPath)
+	refPos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`50`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: linkURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: sharedURI, Version: 1, Text: shadowedShared},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`51`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: linkURI},
+			Position:     refPos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "51")
+	if resp.Error != nil {
+		t.Fatalf("definition error: %+v", resp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, resp.Result, &definitions)
+	if len(definitions) != 1 {
+		t.Fatalf("definition count=%d, want 1", len(definitions))
+	}
+	if definitions[0].URI != sharedURI {
+		t.Fatalf("definition URI=%q, want %q", definitions[0].URI, sharedURI)
+	}
+	if definitions[0].Range.Start.Line != 2 {
+		t.Fatalf("definition line=%d, want 2 for open shadow", definitions[0].Range.Start.Line)
+	}
+}
+
+func TestServerDefinitionReturnsContentModifiedWhenWorkspaceSnapshotDrifts(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	userPos := mustLSPPositionForSubstring(t, []byte(mainText), "types.User input")
+
+	s := NewServer()
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	if _, err := s.Store().Change(context.Background(), mainURI, 2, []TextDocumentContentChangeEvent{{
+		Text: mainText + "\n",
+	}}); err != nil {
+		t.Fatalf("Store.Change: %v", err)
+	}
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`60`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "60")
+	if resp.Error == nil || resp.Error.Code != lspErrorContentModified {
+		t.Fatalf("definition error=%+v, want ContentModified", resp.Error)
+	}
+}
+
+func TestServerRunDefinitionSupportsCaseVariantURIOnCaseInsensitiveFS(t *testing.T) {
+	t.Parallel()
+
+	if !caseInsensitiveFilesystem() {
+		t.Skip("case-variant URIs require a case-insensitive filesystem")
+	}
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+	mainText := string(testutil.ReadFile(t, mainPath))
+	userPos := mustLSPPositionForSubstring(t, []byte(mainText), "types.User input")
+
+	caseVariantPath, ok := alternateCasePath(mainPath)
+	if !ok {
+		t.Skip("no alphabetic characters available for case-variant path")
+	}
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`70`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: rawFileURI(caseVariantPath), Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`71`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: rawFileURI(caseVariantPath)},
+			Position:     userPos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "71")
+	if resp.Error != nil {
+		t.Fatalf("definition error: %+v", resp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, resp.Result, &definitions)
+	if len(definitions) != 1 || definitions[0].URI != typesURI {
+		t.Fatalf("definition=%+v, want single target %q", definitions, typesURI)
+	}
+}
+
 func TestServerRunDocumentFormattingSuccessNoOpRefusalAndStale(t *testing.T) {
 	t.Parallel()
 
@@ -1177,6 +1557,68 @@ func mustCanonicalURI(t *testing.T, path string) string {
 		t.Fatalf("CanonicalizeDocumentURI(%s): %v", path, err)
 	}
 	return uri
+}
+
+func mustLSPPositionForSubstring(t *testing.T, src []byte, needle string) Position {
+	t.Helper()
+	start := strings.Index(string(src), needle)
+	if start < 0 {
+		t.Fatalf("substring %q not found", needle)
+	}
+	li := itext.NewLineIndex(src)
+	pos, err := li.OffsetToUTF16Position(itext.ByteOffset(start))
+	if err != nil {
+		t.Fatalf("OffsetToUTF16Position(%q): %v", needle, err)
+	}
+	return Position{Line: pos.Line, Character: pos.Character}
+}
+
+func lspRangeText(t *testing.T, uri string, rng Range) string {
+	t.Helper()
+	path, err := filePathFromDocumentURI(uri)
+	if err != nil {
+		t.Fatalf("filePathFromDocumentURI(%s): %v", uri, err)
+	}
+	src := testutil.ReadFile(t, path)
+	li := itext.NewLineIndex(src)
+	span, err := byteSpanFromLSPRange(li, rng)
+	if err != nil {
+		t.Fatalf("byteSpanFromLSPRange(%s): %v", uri, err)
+	}
+	if int(span.End) > len(src) {
+		t.Fatalf("range %v out of bounds for %s", rng, uri)
+	}
+	return string(src[span.Start:span.End])
+}
+
+func rawFileURI(path string) string {
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+}
+
+func alternateCasePath(path string) (string, bool) {
+	runes := []rune(path)
+	for i, r := range runes {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		alt := append([]rune(nil), runes...)
+		if unicode.IsUpper(r) {
+			alt[i] = unicode.ToLower(r)
+		} else {
+			alt[i] = unicode.ToUpper(r)
+		}
+		return string(alt), true
+	}
+	return "", false
+}
+
+func caseInsensitiveFilesystem() bool {
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	default:
+		return false
+	}
 }
 
 func diagnosticsForURI(t *testing.T, msgs []testFrame, uri string) []PublishDiagnosticsParams {
