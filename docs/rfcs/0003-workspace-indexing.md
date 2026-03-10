@@ -15,6 +15,8 @@ This RFC adds a shared workspace indexing subsystem that enables:
 - go-to-definition, find references, and rename for top-level declarations
 - future workspace symbol search and code actions on top of the same index
 
+For LSP usage, indexing is lazy: the manager loads the currently opened document and its transitive include closure first, then widens coverage in the background within configured workspace roots and include directories.
+
 The design preserves RFC 0001 and RFC 0002 invariants:
 
 - `syntax.Tree` remains the immutable per-document source of truth
@@ -37,6 +39,7 @@ That is correct for v1, but it leaves three important gaps:
 1. `include` graphs are not resolved, so diagnostics cannot verify qualified references such as `shared.User`.
 2. refactoring features like definition, references, and rename have no shared symbol/reference model to build on.
 3. CLI and LSP semantics will diverge if cross-file logic is later implemented only inside `thriftls`.
+4. eager whole-workspace scans make `initialize` and first-open latency unacceptable in large monorepos.
 
 The index must therefore be a shared engine package, not an LSP-only cache.
 
@@ -65,8 +68,10 @@ The index must therefore be a shared engine package, not an LSP-only cache.
   - `textDocument/prepareRename`
   - `textDocument/rename`
   - `workspace/symbol`
-- Preserve responsive editing by making workspace analysis asynchronous and generation-gated.
+- Preserve responsive editing by making workspace analysis asynchronous, generation-gated, and non-blocking on LSP startup.
 - Allow open unsaved documents to override on-disk workspace state.
+- Use workspace roots as discovery boundaries for LSP, not as mandatory eager-scan boundaries.
+- Respect recursive `.gitignore` rules during opportunistic discovery while still allowing open documents and explicit include targets to load.
 
 ## Non-Goals
 
@@ -76,6 +81,8 @@ The index must therefore be a shared engine package, not an LSP-only cache.
 - Automatic fetching of includes from remote registries or package managers.
 - Indexing files outside configured workspace roots and include directories.
 - Binding `cpp_include` declarations into the semantic graph.
+- Blocking `initialize` or first `didOpen` on an eager whole-workspace crawl.
+- Treating `.gitignore` as a hard ban on indexing an open document or an explicitly resolved include target.
 
 ## Current-State Constraints
 
@@ -86,6 +93,7 @@ The new design must respect these existing constraints from the codebase and pri
 - `internal/lint.Runner` is document-oriented and must remain usable without a workspace index.
 - Parsing is hybrid and lossless, so the index should reuse CST spans instead of inventing a second parser or AST.
 - RFC 0002 requires verified incremental reparsing and fail-open editor lifecycle behavior.
+- workspace roots in large monorepos may contain far more files than are relevant to the active edit, so LSP startup cannot assume whole-root scans are cheap.
 
 These constraints lead to one core rule:
 
@@ -109,10 +117,10 @@ These constraints lead to one core rule:
          +---------------+----------------+
          |                                |
          v                                v
- +---------------+               +-----------------+
- | file scanner  |               | open-doc shadow |
- | on-disk .thrift|              | unsaved wins    |
- +-------+-------+               +--------+--------+
+ +--------------------+          +-----------------+
+ | background discovery|         | open-doc shadow |
+ | roots + .gitignore  |         | unsaved wins    |
+ +---------+----------+          +--------+--------+
          \                                /
           \                              /
            v                            v
@@ -158,7 +166,7 @@ Responsibilities:
 - `manager.go`: own mutable queues/caches and publish immutable workspace snapshots
 - `query.go`: serve definition/reference/rename/workspace-symbol queries
 - `diagnostics.go`: expose workspace-aware diagnostics views for lint/LSP
-- `scanner.go`: discover on-disk `.thrift` files within configured roots
+- `scanner.go`: load on-disk `.thrift` files from explicit include targets and opportunistic root discovery within configured roots
 
 The package must depend on `internal/syntax`, `internal/text`, and standard library packages only. `internal/lsp` and `cmd/thriftlint` consume it; they do not own its semantics.
 
@@ -350,7 +358,28 @@ Rationale:
 - top-level coverage is sufficient for the first meaningful navigation/refactor feature set
 - member-level rename requires a richer semantic model and would expand surface area without unlocking the primary lint/navigation gaps
 
-### 5. Include Resolution
+### 5. Discovery and Include Resolution
+
+Discovery uses two modes:
+
+- direct load:
+  - load the open document itself plus transitive include targets reachable from already loaded documents
+  - direct loads ignore `.gitignore` because they are required for correctness once the user opens a file or an include resolves exactly
+- opportunistic discovery:
+  - low-priority background crawl under configured workspace roots and include directories to widen reverse-dependency coverage and workspace-symbol coverage
+  - opportunistic discovery respects recursive `.gitignore` files plus fixed ignored directories
+
+LSP discovery rules:
+
+- `initialize` and workspace-folder changes create or reconfigure the manager but do not synchronously crawl all workspace roots
+- `didOpen` schedules direct load of the opened document and its transitive include closure in the background
+- initial cross-file diagnostics and go-to-definition may become available as soon as that closure is loaded; they do not wait for a full root crawl
+- the manager may continue opportunistic discovery after the direct closure is available so reverse-dependency queries can become exact later
+
+CLI discovery rules:
+
+- `--cross-file transitive` uses direct load only
+- `--cross-file workspace` may perform full opportunistic discovery immediately because the caller explicitly requested workspace-wide analysis
 
 Resolution must match Thrift include semantics closely enough that users do not see different answers from `thriftls`, `thriftlint`, and the upstream compiler.
 
@@ -372,6 +401,7 @@ Path rules:
 - all resolved paths are canonicalized to a file URI
 - symlinks are resolved before identity comparison
 - resolved files must remain under a configured workspace root or include directory
+- include resolution may materialize a previously undiscovered on-disk document on demand
 - duplicate include aliases within one document are diagnostics and block rename for affected references
 
 Tie-breaking and deduplication rules:
@@ -418,6 +448,7 @@ Published index state is immutable:
 ```go
 type WorkspaceSnapshot struct {
     Generation       uint64
+    DiscoveryComplete bool
     Documents        map[DocumentKey]*DocumentSummary
     SymbolsByID      map[SymbolID]Symbol
     SymbolsByQName   map[QualifiedName][]SymbolID
@@ -439,18 +470,20 @@ Manager behavior:
 The manager tracks two state classes:
 
 - open-document overrides from LSP snapshots
-- on-disk documents from workspace scan
+- on-disk documents loaded either by direct include resolution or opportunistic discovery
 
 Rules:
 
 - open documents always shadow on-disk content for the same URI
 - closing a document removes the shadow and re-exposes on-disk state on the next scan/reload
+- opening or changing a document schedules direct reload of that document plus its transitive include closure
 - a changed document invalidates:
   - its own summary
   - its outbound bindings
-  - reverse dependents reachable through include edges
-- invalidation is graph-based, not whole-workspace by default
-- the manager may schedule a debounced background rescan for filesystem drift
+  - reverse dependents already discovered through include edges
+- undiscovered reverse dependents do not participate in invalidation until opportunistic discovery reaches them
+- invalidation is graph-based over the loaded subgraph, not whole-workspace by default
+- the manager may schedule debounced background discovery/rescan work for filesystem drift
 
 LSP queries must reject stale document versions with `ContentModified` when the caller's document version is older than the active open-document override.
 
@@ -466,16 +499,18 @@ Query freshness contract:
 Workspace root rules:
 
 - LSP roots come from `initialize.workspaceFolders`
+- for LSP, roots bound direct-load and opportunistic discovery; they do not imply a synchronous full scan
 - if the client sends no workspace folders, `thriftls` uses the directory of the first opened document as an implicit root
 - CLI roots come from `--workspace-root`; if omitted in `transitive` mode, the target file's directory becomes the implicit root
 - include directories may be absolute or relative to a workspace root; relative include directories are resolved per root
 
 Fallback consistency strategy:
 
-- when workspace features are enabled, the manager performs a periodic metadata rescan every 30 seconds
-- watcher overflow/error events trigger an immediate debounced full rescan
-- opening a document or manual rescan requests refresh the containing directory before the next full interval
+- when workspace features are enabled, the manager performs a periodic metadata rescan of already loaded documents every 30 seconds
+- watcher overflow/error events trigger an immediate debounced background discovery restart or full rescan, but do not block the request path
+- opening a document schedules direct-load work for the containing document and its transitive includes immediately
 - periodic rescans compare path, size, and modification time before reparsing to cap steady-state cost
+- opportunistic discovery skips `.git`, `.hg`, `.svn`, `.idea`, `.vscode`, and paths ignored by recursive `.gitignore` rules
 
 ### 9. Failure and Partial-State Policy
 
@@ -486,13 +521,18 @@ Diagnostics behavior:
 - unresolved includes, ambiguous aliases, and tainted reference sites produce diagnostics
 - documents with parse recovery still contribute declarations and references that can be extracted safely
 - parse-tainted sites do not silently bind
+- cross-file diagnostics for the active document may publish as soon as its loaded include closure is available; they do not wait for opportunistic root discovery to finish
+- files ignored by `.gitignore` stay out of opportunistic discovery unless they are directly opened or explicitly reached through include resolution
 
 Refactor behavior:
 
-- `prepareRename` and `rename` require an exact declaration binding
+- `prepareRename` requires an exact declaration binding but does not require opportunistic discovery to be complete
+- `rename` requires an exact declaration binding plus discovery-complete coverage for the in-scope workspace set
 - rename must fail when any affected declaration or reference site is tainted or ambiguous
 - rename must fail closed when `newName` does not lex as a standalone Thrift identifier, is a reserved keyword, contains qualification separators, or would make any rewritten binding ambiguous under the post-rename snapshot
-- definition/references may return partial results only when the queried symbol binding itself is exact
+- `definition` may succeed as soon as the queried binding is exact inside the loaded graph
+- `references` must return `ErrWorkspaceIncomplete` rather than partial results when reverse-dependency coverage is not yet discovery-complete
+- `workspace/symbol` may return best-effort matches over the currently loaded graph and reports completeness through `QueryMeta.DiscoveryComplete`
 
 This policy avoids incorrect edits while still giving useful navigation and diagnostics during incomplete editing.
 
@@ -546,12 +586,14 @@ type QueryMeta struct {
     DocumentURI         string
     DocumentVersion     int32
     DocumentGeneration  uint64
+    DiscoveryComplete   bool
 }
 
 var (
-    ErrContentModified = errors.New("content modified")
-    ErrRenameBlocked   = errors.New("rename blocked")
-    ErrWorkspaceClosed = errors.New("workspace snapshot unavailable")
+    ErrContentModified    = errors.New("content modified")
+    ErrRenameBlocked      = errors.New("rename blocked")
+    ErrWorkspaceClosed    = errors.New("workspace snapshot unavailable")
+    ErrWorkspaceIncomplete = errors.New("workspace discovery incomplete")
 )
 
 func (m *Manager) Definition(ctx context.Context, doc QueryDocument, pos text.UTF16Position) ([]Location, QueryMeta, error)
@@ -570,6 +612,9 @@ Caller contract:
 - `Definition`, `References`, and `WorkspaceSymbols` return empty results with `nil` error when no binding matches the queried position/text
 - `ErrContentModified` is required when the caller document no longer matches any compatible snapshot
 - `ErrWorkspaceClosed` is required when no workspace snapshot has been published yet
+- `QueryMeta.DiscoveryComplete` reports whether opportunistic discovery has finished for the current workspace scope
+- `References` and `Rename` may return `ErrWorkspaceIncomplete` when exact reverse-dependency coverage is not yet available
+- `WorkspaceSymbols` searches the currently loaded graph and uses `QueryMeta.DiscoveryComplete` to report whether results cover the full discovered scope
 - `PrepareRename` and `Rename` use `ErrRenameBlocked` for semantic blockers and include machine-readable blocker diagnostics in the result payload
 
 Prepare-rename contract:
@@ -654,8 +699,12 @@ Protocol rules:
 - workspace diagnostics publish asynchronously when an index generation includes the current document generation
 - diagnostics are merged from independent source buckets (`parser`, `local-lint`, `workspace-lint`) before publish, so a late workspace result cannot clear newer parser/local diagnostics
 - navigation/refactor requests are served from the latest compatible workspace snapshot
-- stale or blocked rename operations return `RequestFailed` with a concrete reason
-- `workspace/didChangeWatchedFiles` events trigger targeted rescans for affected URIs and their reverse dependents
+- `initialize` and first `didOpen` must not synchronously scan all configured workspace roots
+- `textDocument/definition` may succeed before opportunistic discovery finishes
+- `textDocument/references` and `textDocument/rename` may return `RequestFailed` with an explicit "workspace discovery incomplete" reason until exact coverage is available
+- `workspace/symbol` searches the currently loaded graph and may widen results as opportunistic discovery progresses
+- stale, incomplete, or blocked rename operations return `RequestFailed` with a concrete reason
+- `workspace/didChangeWatchedFiles` events trigger targeted rescans for affected loaded URIs and may enqueue further background discovery work
 
 ## CLI Changes
 
@@ -675,7 +724,7 @@ Meaning:
 
 - `off`: current single-document behavior only
 - `transitive`: index the target file plus transitive includes reachable from it
-- `workspace`: scan all configured workspace roots and include directories
+- `workspace`: perform workspace-wide discovery under configured roots and include directories
 
 This keeps existing workflows fast while making cross-file analysis explicit in CLI contexts.
 
@@ -687,7 +736,8 @@ Targets for a warm local session:
 - single-document workspace update with <=25 impacted dependents: p95 <150 ms after debounce
 - definition/references query on a warm snapshot: p95 <30 ms
 - rename plan for <=200 edits: p95 <75 ms
-- initial scan of 1,000 thrift files / 50 MB total source: p95 <5 s on reference hardware
+- first-open background publication for one active document plus <=20 reachable includes: p95 <500 ms without delaying the LSP response
+- explicit workspace discovery of 1,000 thrift files / 50 MB total source: p95 <5 s on reference hardware
 
 The manager must avoid unbounded memory growth across repeated open/change/close cycles and repeated rescans.
 
@@ -697,7 +747,8 @@ The manager must avoid unbounded memory growth across repeated open/change/close
 - no network access is permitted for include resolution
 - symlink escapes outside allowed roots are rejected
 - `MaxFiles` and `MaxFileBytes` defaults are required to cap resource use
-- file discovery ignores `.git`, `.hg`, `.svn`, `.idea`, and `.vscode`
+- opportunistic discovery ignores `.git`, `.hg`, `.svn`, `.idea`, `.vscode`, and paths ignored by recursive `.gitignore` rules
+- direct loads for open documents and explicitly resolved include targets bypass `.gitignore`
 
 ## Observability
 
@@ -709,6 +760,8 @@ Expose structured logs and metrics hooks for:
 - rebuild reason (`open`, `change`, `close`, `watch`, `manual-rescan`)
 - impacted document count
 - workspace generation number
+- discovery completeness state
+- background discovery queue depth
 - query latency by method
 - rename blocker counts by reason
 
@@ -721,6 +774,7 @@ Add multi-file fixtures under `testdata/index/` covering:
 - resolved includes
 - missing includes
 - duplicate include aliases
+- `.gitignore`-ignored discovery paths
 - reverse dependency invalidation
 - open-document shadowing of on-disk files
 - cyclic include graphs
@@ -732,22 +786,24 @@ Required tests:
 1. Unit tests for summary extraction and include resolution.
 2. Binding tests for local vs qualified references.
 3. Manager tests for invalidation and atomic snapshot publication.
-4. LSP integration tests for definition/references/rename freshness behavior.
+4. LSP integration tests for non-blocking startup, definition/references/rename freshness behavior, and explicit `workspace discovery incomplete` responses.
 5. CLI tests for `--cross-file` modes.
-6. Race tests for concurrent open/change/query workloads.
+6. Scanner tests for recursive `.gitignore` handling, including the rule that explicit include loads bypass ignore patterns.
+7. Race tests for concurrent open/change/query workloads.
 
 ## Rollout Plan
 
 ### M6: Index Foundation
 
 - add `internal/index`
-- add workspace scan and document summary extraction
+- add lazy workspace discovery and document summary extraction
 - publish immutable workspace snapshots
 - no user-visible navigation/refactor features yet
 
 Acceptance:
 
-- index snapshots build from on-disk files and open-document overrides
+- index snapshots build from direct loads, background discovery, and open-document overrides
+- first `didOpen` does not block on a whole-root scan
 - unresolved includes and alias collisions are test-covered
 
 ### M7: Cross-File Diagnostics
@@ -767,7 +823,7 @@ Acceptance:
 Acceptance:
 
 - go-to-definition works for indexed top-level declarations
-- references work for indexed top-level declarations
+- references work for indexed top-level declarations once discovery is complete, otherwise fail with an explicit incompleteness error
 - open unsaved documents shadow on-disk answers
 
 ### M9: Safe Rename
@@ -776,7 +832,7 @@ Acceptance:
 
 Acceptance:
 
-- rename produces deterministic workspace edits
+- rename produces deterministic workspace edits after discovery-complete coverage is available
 - ambiguous or tainted bindings fail closed with explicit blockers
 
 ## Open Questions
