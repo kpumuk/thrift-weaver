@@ -324,6 +324,26 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(locations)
+	case "textDocument/prepareRename":
+		var p PrepareRenameParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		result, err := s.PrepareRename(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(result)
+	case "textDocument/rename":
+		var p RenameParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		edit, err := s.Rename(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(edit)
 	case "textDocument/documentSymbol":
 		var p DocumentSymbolParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {

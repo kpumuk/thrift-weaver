@@ -157,6 +157,123 @@ func TestManagerDefinitionRejectsContentModified(t *testing.T) {
 	}
 }
 
+func TestManagerPrepareRenameAndRename(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "rename")
+	m := NewManager(Options{WorkspaceRoots: []string{root}})
+	defer m.Close()
+	m.setRescanIntervalForTesting(5 * time.Minute)
+
+	if err := m.RescanWorkspace(context.Background()); err != nil {
+		t.Fatalf("RescanWorkspace: %v", err)
+	}
+
+	mainPath := filepath.Join(root, "main.thrift")
+	doc := mustDocument(t, mustSnapshot(t, m), mainPath)
+	source := testutil.ReadFile(t, mainPath)
+	pos := mustUTF16PositionForSubstring(t, source, "shared.User user")
+
+	prep, _, err := m.PrepareRename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, pos)
+	if err != nil {
+		t.Fatalf("PrepareRename: %v", err)
+	}
+	if prep.Placeholder != "User" {
+		t.Fatalf("PrepareRename placeholder=%q, want %q", prep.Placeholder, "User")
+	}
+	if got := string(source[prep.Span.Start:prep.Span.End]); got != "User" {
+		t.Fatalf("PrepareRename span text=%q, want %q", got, "User")
+	}
+
+	result, _, err := m.Rename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, pos, "Person")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if len(result.Documents) != 2 {
+		t.Fatalf("Rename documents=%d, want 2", len(result.Documents))
+	}
+	if result.Documents[0].URI >= result.Documents[1].URI {
+		t.Fatalf("Rename documents out of order: %+v", result.Documents)
+	}
+	if result.Documents[0].Version != nil || result.Documents[1].Version != nil {
+		t.Fatalf("on-disk rename should not set document versions: %+v", result.Documents)
+	}
+	if len(result.Documents[0].Edits) != 2 || result.Documents[0].Edits[0].Span.Start <= result.Documents[0].Edits[1].Span.Start {
+		t.Fatalf("main edits should be descending and contain two replacements: %+v", result.Documents[0].Edits)
+	}
+
+	renamedMain := applyRenameEdits(t, mainPath, result.Documents[0].Edits)
+	if string(renamedMain) != "include \"shared.thrift\"\n\nstruct Holder {\n  1: shared.Person user,\n  2: shared.Person backup,\n}\n" {
+		t.Fatalf("renamed main = %q", renamedMain)
+	}
+	renamedShared := applyRenameEdits(t, filepath.Join(root, "shared.thrift"), result.Documents[1].Edits)
+	if string(renamedShared) != "struct Person {\n  1: string name,\n}\n" {
+		t.Fatalf("renamed shared = %q", renamedShared)
+	}
+}
+
+func TestManagerRenameBlocksInvalidName(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "rename")
+	m := NewManager(Options{WorkspaceRoots: []string{root}})
+	defer m.Close()
+	m.setRescanIntervalForTesting(5 * time.Minute)
+
+	if err := m.RescanWorkspace(context.Background()); err != nil {
+		t.Fatalf("RescanWorkspace: %v", err)
+	}
+
+	mainPath := filepath.Join(root, "main.thrift")
+	doc := mustDocument(t, mustSnapshot(t, m), mainPath)
+	result, _, err := m.Rename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, mustUTF16PositionForSubstring(t, testutil.ReadFile(t, mainPath), "shared.User user"), "struct")
+	if !errors.Is(err, ErrRenameBlocked) {
+		t.Fatalf("Rename error=%v, want %v", err, ErrRenameBlocked)
+	}
+	if len(result.Blockers) != 1 || result.Blockers[0].Code != DiagnosticRenameInvalidName {
+		t.Fatalf("Rename blockers=%+v, want invalid-name blocker", result.Blockers)
+	}
+}
+
+func TestManagerPrepareRenameBlocksAmbiguousReference(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "duplicate_alias")
+	m := NewManager(Options{WorkspaceRoots: []string{root}})
+	defer m.Close()
+	m.setRescanIntervalForTesting(5 * time.Minute)
+
+	if err := m.RescanWorkspace(context.Background()); err != nil {
+		t.Fatalf("RescanWorkspace: %v", err)
+	}
+
+	mainPath := filepath.Join(root, "main.thrift")
+	doc := mustDocument(t, mustSnapshot(t, m), mainPath)
+	result, _, err := m.PrepareRename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, mustUTF16PositionForSubstring(t, testutil.ReadFile(t, mainPath), "shared.User"))
+	if !errors.Is(err, ErrRenameBlocked) {
+		t.Fatalf("PrepareRename error=%v, want %v", err, ErrRenameBlocked)
+	}
+	if len(result.Blockers) != 1 || result.Blockers[0].Code != DiagnosticRenameTargetAmbiguous {
+		t.Fatalf("PrepareRename blockers=%+v, want ambiguous blocker", result.Blockers)
+	}
+}
+
 func mustUTF16PositionForSubstring(t *testing.T, src []byte, needle string) text.UTF16Position {
 	t.Helper()
 	start := strings.Index(string(src), needle)
@@ -182,4 +299,14 @@ func locationText(t *testing.T, location Location) string {
 		t.Fatalf("invalid location span %v for %s", location.Span, location.URI)
 	}
 	return string(src[location.Span.Start:location.Span.End])
+}
+
+func applyRenameEdits(t *testing.T, path string, edits []text.ByteEdit) []byte {
+	t.Helper()
+	src := testutil.ReadFile(t, path)
+	out, err := text.ApplyEdits(src, edits)
+	if err != nil {
+		t.Fatalf("ApplyEdits(%s): %v", path, err)
+	}
+	return out
 }

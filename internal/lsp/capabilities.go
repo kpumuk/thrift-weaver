@@ -10,6 +10,7 @@ func DefaultServerCapabilities() ServerCapabilities {
 		},
 		DefinitionProvider:              true,
 		ReferencesProvider:              true,
+		RenameProvider:                  true,
 		DocumentFormattingProvider:      true,
 		DocumentRangeFormattingProvider: true,
 		DocumentSymbolProvider:          true,

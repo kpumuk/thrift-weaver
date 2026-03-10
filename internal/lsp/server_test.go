@@ -39,7 +39,7 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	if got.TextDocumentSync.Save == nil || got.TextDocumentSync.Save.IncludeText {
 		t.Fatalf("unexpected didSave sync options: %+v", got.TextDocumentSync.Save)
 	}
-	if !got.DefinitionProvider || !got.ReferencesProvider || !got.WorkspaceSymbolProvider {
+	if !got.DefinitionProvider || !got.ReferencesProvider || !got.RenameProvider || !got.WorkspaceSymbolProvider {
 		t.Fatalf("navigation capabilities not advertised: %+v", got)
 	}
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
@@ -1082,6 +1082,320 @@ func TestServerRunDefinitionSupportsCaseVariantURIOnCaseInsensitiveFS(t *testing
 	}
 }
 
+func TestServerRunPrepareRenameAndRename(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "rename")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	sharedURI := mustCanonicalURI(t, sharedPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User user")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`80`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`81`),
+		Method:  "textDocument/prepareRename",
+		Params: mustJSON(t, PrepareRenameParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`82`),
+		Method:  "textDocument/rename",
+		Params: mustJSON(t, RenameParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     renamePos,
+			},
+			NewName: "Person",
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+
+	prepareResp := responseByID(t, msgs, "81")
+	if prepareResp.Error != nil {
+		t.Fatalf("prepareRename error: %+v", prepareResp.Error)
+	}
+	var prepareResult PrepareRenameResult
+	marshalRoundtrip(t, prepareResp.Result, &prepareResult)
+	if prepareResult.Placeholder != "User" {
+		t.Fatalf("prepareRename placeholder=%q, want %q", prepareResult.Placeholder, "User")
+	}
+	if got := lspRangeText(t, mainURI, prepareResult.Range); got != "User" {
+		t.Fatalf("prepareRename text=%q, want %q", got, "User")
+	}
+
+	renameResp := responseByID(t, msgs, "82")
+	if renameResp.Error != nil {
+		t.Fatalf("rename error: %+v", renameResp.Error)
+	}
+	var edit WorkspaceEdit
+	marshalRoundtrip(t, renameResp.Result, &edit)
+	if len(edit.DocumentChanges) != 2 {
+		t.Fatalf("rename documentChanges=%d, want 2", len(edit.DocumentChanges))
+	}
+	if edit.DocumentChanges[0].TextDocument.URI != mainURI || edit.DocumentChanges[1].TextDocument.URI != sharedURI {
+		t.Fatalf("rename document order=%+v", edit.DocumentChanges)
+	}
+	if edit.DocumentChanges[0].TextDocument.Version == nil || *edit.DocumentChanges[0].TextDocument.Version != 1 {
+		t.Fatalf("open document version=%v, want 1", edit.DocumentChanges[0].TextDocument.Version)
+	}
+	if edit.DocumentChanges[1].TextDocument.Version != nil {
+		t.Fatalf("closed document version=%v, want nil", edit.DocumentChanges[1].TextDocument.Version)
+	}
+	if len(edit.DocumentChanges[0].Edits) != 2 {
+		t.Fatalf("main rename edits=%+v, want 2", edit.DocumentChanges[0].Edits)
+	}
+	if compareRangeStarts(edit.DocumentChanges[0].Edits[0].Range, edit.DocumentChanges[0].Edits[1].Range) >= 0 {
+		t.Fatalf("main rename edits should be sorted ascending: %+v", edit.DocumentChanges[0].Edits)
+	}
+
+	renamedMain := applyWorkspaceTextEdits(t, []byte(mainText), edit.DocumentChanges[0].Edits)
+	if string(renamedMain) != "include \"shared.thrift\"\n\nstruct Holder {\n  1: shared.Person user,\n  2: shared.Person backup,\n}\n" {
+		t.Fatalf("renamed main = %q", renamedMain)
+	}
+	renamedShared := applyWorkspaceTextEdits(t, testutil.ReadFile(t, sharedPath), edit.DocumentChanges[1].Edits)
+	if string(renamedShared) != "struct Person {\n  1: string name,\n}\n" {
+		t.Fatalf("renamed shared = %q", renamedShared)
+	}
+}
+
+func TestServerRunRenameBlockedForAmbiguousReference(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "duplicate_alias")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`90`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`91`),
+		Method:  "textDocument/prepareRename",
+		Params: mustJSON(t, PrepareRenameParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "91")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("prepareRename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "ambiguous") {
+		t.Fatalf("prepareRename message=%q, want ambiguous", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameBlockedForTaintedReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sharedPath := filepath.Join(root, "shared.thrift")
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
+
+	rootURI := mustCanonicalURI(t, root)
+	mainURI := mustCanonicalURI(t, filepath.Join(root, "main.thrift"))
+	mainText := "include \"shared.thrift\"\n\nstruct Holder {\n  1: shared.User user,\n"
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`95`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`96`),
+		Method:  "textDocument/prepareRename",
+		Params: mustJSON(t, PrepareRenameParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "96")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("prepareRename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "tainted") {
+		t.Fatalf("prepareRename message=%q, want tainted", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameBlockedForInvalidName(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "rename")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User user")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`100`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`101`),
+		Method:  "textDocument/rename",
+		Params: mustJSON(t, RenameParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     renamePos,
+			},
+			NewName: "struct",
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "101")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("rename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "identifier") {
+		t.Fatalf("rename message=%q, want identifier", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameAbortsOnClosedFileDrift(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "rename")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User user")
+
+	s := NewServer()
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n  2: string alias,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`110`),
+		Method:  "textDocument/rename",
+		Params: mustJSON(t, RenameParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     renamePos,
+			},
+			NewName: "Person",
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "110")
+	if resp.Error == nil || resp.Error.Code != lspErrorContentModified {
+		t.Fatalf("rename error=%+v, want ContentModified", resp.Error)
+	}
+}
+
 func TestServerRunDocumentFormattingSuccessNoOpRefusalAndStale(t *testing.T) {
 	t.Parallel()
 
@@ -1589,6 +1903,43 @@ func lspRangeText(t *testing.T, uri string, rng Range) string {
 		t.Fatalf("range %v out of bounds for %s", rng, uri)
 	}
 	return string(src[span.Start:span.End])
+}
+
+func applyWorkspaceTextEdits(t *testing.T, src []byte, edits []TextEdit) []byte {
+	t.Helper()
+	li := itext.NewLineIndex(src)
+	byteEdits := make([]itext.ByteEdit, 0, len(edits))
+	for _, edit := range edits {
+		span, err := byteSpanFromLSPRange(li, edit.Range)
+		if err != nil {
+			t.Fatalf("byteSpanFromLSPRange: %v", err)
+		}
+		byteEdits = append(byteEdits, itext.ByteEdit{
+			Span:    span,
+			NewText: []byte(edit.NewText),
+		})
+	}
+	out, err := itext.ApplyEdits(src, byteEdits)
+	if err != nil {
+		t.Fatalf("ApplyEdits: %v", err)
+	}
+	return out
+}
+
+func compareRangeStarts(a, b Range) int {
+	if a.Start.Line < b.Start.Line {
+		return -1
+	}
+	if a.Start.Line > b.Start.Line {
+		return 1
+	}
+	if a.Start.Character < b.Start.Character {
+		return -1
+	}
+	if a.Start.Character > b.Start.Character {
+		return 1
+	}
+	return 0
 }
 
 func rawFileURI(path string) string {

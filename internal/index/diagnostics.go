@@ -17,6 +17,11 @@ const (
 	DiagnosticQualifiedReferenceUnknown = "INDEX_QUALIFIED_REFERENCE_UNKNOWN"
 	DiagnosticQualifiedReferenceAmbig   = "INDEX_QUALIFIED_REFERENCE_AMBIGUOUS"
 	DiagnosticReferenceUnsupported      = "INDEX_REFERENCE_UNSUPPORTED"
+	DiagnosticRenameTargetUnavailable   = "INDEX_RENAME_TARGET_UNAVAILABLE"
+	DiagnosticRenameTargetAmbiguous     = "INDEX_RENAME_TARGET_AMBIGUOUS"
+	DiagnosticRenameTargetTainted       = "INDEX_RENAME_TARGET_TAINTED"
+	DiagnosticRenameInvalidName         = "INDEX_RENAME_INVALID_NAME"
+	DiagnosticRenameCollision           = "INDEX_RENAME_COLLISION"
 )
 
 func newDiagnostic(uri, code, message string, severity syntax.Severity, span text.Span) IndexDiagnostic {

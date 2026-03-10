@@ -55,6 +55,7 @@ type ServerCapabilities struct {
 	TextDocumentSync                TextDocumentSyncOptions `json:"textDocumentSync"`
 	DefinitionProvider              bool                    `json:"definitionProvider,omitempty"`
 	ReferencesProvider              bool                    `json:"referencesProvider,omitempty"`
+	RenameProvider                  bool                    `json:"renameProvider,omitempty"`
 	DocumentFormattingProvider      bool                    `json:"documentFormattingProvider,omitempty"`
 	DocumentRangeFormattingProvider bool                    `json:"documentRangeFormattingProvider,omitempty"`
 	DocumentSymbolProvider          bool                    `json:"documentSymbolProvider,omitempty"`
@@ -221,6 +222,38 @@ type SymbolInformation struct {
 	Kind          int      `json:"kind"`
 	Location      Location `json:"location"`
 	ContainerName string   `json:"containerName,omitempty"`
+}
+
+// PrepareRenameParams is the textDocument/prepareRename request payload.
+type PrepareRenameParams = TextDocumentPositionParams
+
+// RenameParams is the textDocument/rename request payload.
+type RenameParams struct {
+	TextDocumentPositionParams
+	NewName string `json:"newName"`
+}
+
+// PrepareRenameResult describes the editable range and placeholder for rename.
+type PrepareRenameResult struct {
+	Range       Range  `json:"range"`
+	Placeholder string `json:"placeholder,omitempty"`
+}
+
+// OptionalVersionedTextDocumentIdentifier identifies a document for workspace edits.
+type OptionalVersionedTextDocumentIdentifier struct {
+	URI     string `json:"uri"`
+	Version *int32 `json:"version,omitempty"`
+}
+
+// TextDocumentEdit is a workspace edit for one document.
+type TextDocumentEdit struct {
+	TextDocument OptionalVersionedTextDocumentIdentifier `json:"textDocument"`
+	Edits        []TextEdit                              `json:"edits"`
+}
+
+// WorkspaceEdit is an LSP workspace edit response payload.
+type WorkspaceEdit struct {
+	DocumentChanges []TextDocumentEdit `json:"documentChanges,omitempty"`
 }
 
 // DocumentSymbolParams identifies the target document for symbol requests.
