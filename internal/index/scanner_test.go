@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -64,5 +65,58 @@ func TestScanWorkspaceRejectsSymlinkEscape(t *testing.T) {
 	_, err := scanWorkspace(context.Background(), []string{root}, nil, 10, 1<<20)
 	if err == nil || !strings.Contains(err.Error(), "outside allowed roots") {
 		t.Fatalf("scanWorkspace error=%v, want symlink escape rejection", err)
+	}
+}
+
+func TestScanWorkspaceRespectsRecursiveGitIgnore(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.thrift"), []byte("struct Main {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile main: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("vendor/\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile root .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o750); err != nil {
+		t.Fatalf("MkdirAll vendor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vendor", "hidden.thrift"), []byte("struct Hidden {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile hidden: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", ".gitignore"), []byte("*.thrift\n!keep.thrift\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile nested .gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "skip.thrift"), []byte("struct Skip {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile skip: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "keep.thrift"), []byte("struct Keep {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile keep: %v", err)
+	}
+
+	files, err := scanWorkspace(context.Background(), []string{root}, nil, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("scanWorkspace: %v", err)
+	}
+
+	normalizedRoot, err := normalizeRuntimePath(root)
+	if err != nil {
+		t.Fatalf("normalizeRuntimePath(%s): %v", root, err)
+	}
+	got := make([]string, 0, len(files))
+	for _, file := range files {
+		rel, err := filepath.Rel(normalizedRoot, file.Path)
+		if err != nil {
+			t.Fatalf("filepath.Rel(%s, %s): %v", normalizedRoot, file.Path, err)
+		}
+		got = append(got, filepath.ToSlash(rel))
+	}
+	slices.Sort(got)
+	want := []string{"main.thrift", "nested/keep.thrift"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("scanned files=%v, want %v", got, want)
 	}
 }

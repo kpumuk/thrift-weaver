@@ -43,12 +43,16 @@ type Server struct {
 	lintJobs     map[string]lintJobState
 	lintWG       sync.WaitGroup
 
-	workspaceMu       sync.Mutex
-	workspace         *index.Manager
-	workspaceRoots    []string
-	workspaceLintMu   sync.Mutex
-	workspaceLintJobs map[string]lintJobState
-	workspaceLintWG   sync.WaitGroup
+	workspaceMu               sync.Mutex
+	workspace                 *index.Manager
+	workspaceRoots            []string
+	workspaceDiscoveryMu      sync.Mutex
+	workspaceDiscoveryRunning bool
+	workspaceDiscoveryQueued  bool
+	workspaceDiscoveryReason  index.RebuildReason
+	workspaceLintMu           sync.Mutex
+	workspaceLintJobs         map[string]lintJobState
+	workspaceLintWG           sync.WaitGroup
 
 	diagMu      sync.Mutex
 	diagnostics map[string]documentDiagnostics
@@ -478,15 +482,11 @@ func (s *Server) DidSave(ctx context.Context, p DidSaveParams) error {
 	if manager == nil {
 		return nil
 	}
-	if err := manager.RescanWorkspaceWithReason(ctx, index.RebuildReasonChange); err != nil {
-		return err
-	}
 	return s.syncWorkspaceDocumentWithReason(ctx, p.TextDocument.URI, index.RebuildReasonChange)
 }
 
 // DidClose removes the document snapshot if present.
 func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
-	_ = ctx
 	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
@@ -496,6 +496,10 @@ func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
 		if err := manager.CloseOpenDocumentWithReason(ctx, uri, index.RebuildReasonClose); err != nil {
 			return err
 		}
+		if err := manager.RefreshOpenDocumentClosureWithReason(ctx, index.RebuildReasonClose); err != nil {
+			return err
+		}
+		s.scheduleWorkspaceDiscovery(index.RebuildReasonClose)
 	}
 	return nil
 }
@@ -534,12 +538,10 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, p DidChangeWatchedFi
 	for _, change := range p.Changes {
 		deleted := change.Type == FileChangeTypeDeleted
 		if err := manager.RefreshDocumentWithReason(ctx, change.URI, deleted, index.RebuildReasonWatch); err != nil {
-			if err := manager.RescanWorkspaceWithReason(ctx, index.RebuildReasonWatch); err != nil {
-				return err
-			}
-			break
+			return err
 		}
 	}
+	s.scheduleWorkspaceDiscovery(index.RebuildReasonWatch)
 	s.scheduleWorkspaceLintPublishForAllOpenDocuments()
 	return nil
 }
@@ -632,10 +634,6 @@ func (s *Server) configureWorkspaceFolders(ctx context.Context, folders []Worksp
 
 func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) error {
 	manager := index.NewManager(index.Options{WorkspaceRoots: roots})
-	if err := manager.RescanWorkspaceWithReason(ctx, index.RebuildReasonManualRescan); err != nil {
-		manager.Close()
-		return err
-	}
 
 	store, err := s.requireStore()
 	if err != nil {
@@ -653,6 +651,10 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 			return err
 		}
 	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, index.RebuildReasonManualRescan); err != nil {
+		manager.Close()
+		return err
+	}
 
 	s.workspaceMu.Lock()
 	old := s.workspace
@@ -662,6 +664,7 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 	if old != nil {
 		old.Close()
 	}
+	s.scheduleWorkspaceDiscovery(index.RebuildReasonManualRescan)
 	return nil
 }
 
@@ -756,12 +759,80 @@ func (s *Server) syncWorkspaceDocumentWithReason(ctx context.Context, uri string
 	if snap == nil {
 		return nil
 	}
-	return manager.UpsertOpenDocumentWithReason(ctx, index.DocumentInput{
+	if err := manager.UpsertOpenDocumentWithReason(ctx, index.DocumentInput{
 		URI:        snap.URI,
 		Version:    snap.Version,
 		Generation: snap.Generation,
 		Source:     snap.Bytes(),
-	}, reason)
+	}, reason); err != nil {
+		return err
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, reason); err != nil {
+		return err
+	}
+	s.scheduleWorkspaceDiscovery(reason)
+	return nil
+}
+
+func (s *Server) scheduleWorkspaceDiscovery(reason index.RebuildReason) {
+	if s == nil {
+		return
+	}
+
+	s.workspaceDiscoveryMu.Lock()
+	s.workspaceDiscoveryReason = reason
+	if s.workspaceDiscoveryRunning {
+		s.workspaceDiscoveryQueued = true
+		s.workspaceDiscoveryMu.Unlock()
+		return
+	}
+	s.workspaceDiscoveryRunning = true
+	s.workspaceDiscoveryQueued = false
+	s.workspaceDiscoveryMu.Unlock()
+
+	go s.runWorkspaceDiscoveryLoop()
+}
+
+func (s *Server) runWorkspaceDiscoveryLoop() {
+	for {
+		manager := s.workspaceManager()
+		if manager != nil {
+			reason := s.workspaceDiscoveryReasonSnapshot()
+			if s.shouldRescanWorkspace(manager, reason) {
+				_ = manager.RescanWorkspaceWithReason(context.Background(), reason)
+				s.scheduleWorkspaceLintPublishForAllOpenDocuments()
+			}
+		}
+
+		s.workspaceDiscoveryMu.Lock()
+		if !s.workspaceDiscoveryQueued {
+			s.workspaceDiscoveryRunning = false
+			s.workspaceDiscoveryMu.Unlock()
+			return
+		}
+		s.workspaceDiscoveryQueued = false
+		s.workspaceDiscoveryMu.Unlock()
+	}
+}
+
+func (s *Server) workspaceDiscoveryReasonSnapshot() index.RebuildReason {
+	s.workspaceDiscoveryMu.Lock()
+	defer s.workspaceDiscoveryMu.Unlock()
+	return s.workspaceDiscoveryReason
+}
+
+func (s *Server) shouldRescanWorkspace(manager *index.Manager, reason index.RebuildReason) bool {
+	if manager == nil {
+		return false
+	}
+	snapshot, ok := manager.Snapshot()
+	if !ok || snapshot == nil {
+		return false
+	}
+	if !snapshot.DiscoveryComplete {
+		return true
+	}
+	return reason == index.RebuildReasonWatch || reason == index.RebuildReasonManualRescan
 }
 
 func (s *Server) latestSnapshot(uri string) (*Snapshot, error) {

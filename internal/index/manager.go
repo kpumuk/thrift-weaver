@@ -27,10 +27,21 @@ type documentState struct {
 	modTime time.Time
 }
 
+type loadedDiskState struct {
+	file    scannedFile
+	summary *DocumentSummary
+}
+
+type diskSources struct {
+	direct        bool
+	opportunistic bool
+}
+
 type documentSlot struct {
 	key        DocumentKey
 	displayURI string
 	disk       *documentState
+	sources    diskSources
 	open       *documentState
 }
 
@@ -42,6 +53,75 @@ func (s *documentSlot) active() *documentState {
 		return s.open
 	}
 	return s.disk
+}
+
+func (s *documentSlot) hasSource(kind diskSourceKind) bool {
+	if s == nil {
+		return false
+	}
+	switch kind {
+	case diskSourceDirect:
+		return s.sources.direct
+	case diskSourceOpportunistic:
+		return s.sources.opportunistic
+	default:
+		return false
+	}
+}
+
+func (s *documentSlot) setSource(kind diskSourceKind, enabled bool) {
+	if s == nil {
+		return
+	}
+	switch kind {
+	case diskSourceDirect:
+		s.sources.direct = enabled
+	case diskSourceOpportunistic:
+		s.sources.opportunistic = enabled
+	}
+}
+
+func (s *documentSlot) clearDiskIfUnused() {
+	if s == nil || s.sources.direct || s.sources.opportunistic {
+		return
+	}
+	s.disk = nil
+}
+
+type diskSourceKind uint8
+
+const (
+	diskSourceDirect diskSourceKind = iota + 1
+	diskSourceOpportunistic
+)
+
+type activeDocumentIdentity struct {
+	present    bool
+	uri        string
+	version    int32
+	generation uint64
+	hash       [32]byte
+}
+
+func identityForState(state *documentState) activeDocumentIdentity {
+	if state == nil || state.summary == nil {
+		return activeDocumentIdentity{}
+	}
+	return activeDocumentIdentity{
+		present:    true,
+		uri:        state.summary.URI,
+		version:    state.summary.Version,
+		generation: state.summary.Generation,
+		hash:       state.summary.ContentHash,
+	}
+}
+
+func sameActiveIdentity(a, b activeDocumentIdentity) bool {
+	return a.present == b.present &&
+		a.uri == b.uri &&
+		a.version == b.version &&
+		a.generation == b.generation &&
+		a.hash == b.hash
 }
 
 // Manager publishes immutable workspace snapshots built from document summaries.
@@ -130,7 +210,7 @@ func (m *Manager) UpsertOpenDocumentWithReason(ctx context.Context, in DocumentI
 	slot := m.ensureSlotLocked(key, displayURI)
 	hadActive := slot.active() != nil
 	slot.open = &documentState{input: in, summary: summary}
-	m.publishLocked([]DocumentKey{key}, !hadActive, reason, time.Since(start), 0)
+	m.publishLocked([]DocumentKey{key}, !hadActive, reason, time.Since(start), 0, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -165,7 +245,7 @@ func (m *Manager) CloseOpenDocumentWithReason(ctx context.Context, uri string, r
 	if !hasActive {
 		delete(m.slots, key)
 	}
-	m.publishLocked([]DocumentKey{key}, hadActive != hasActive, reason, time.Since(start), 0)
+	m.publishLocked([]DocumentKey{key}, hadActive != hasActive, reason, time.Since(start), 0, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -186,27 +266,12 @@ func (m *Manager) RescanWorkspaceWithReason(ctx context.Context, reason RebuildR
 	}
 	scanDuration := time.Since(start)
 
-	type nextDiskState struct {
-		file    scannedFile
-		summary *DocumentSummary
-	}
-
-	next := make(map[DocumentKey]nextDiskState, len(files))
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	changed := make([]DocumentKey, 0, len(files))
-	fullRebuild := false
+	next := make(map[DocumentKey]loadedDiskState, len(files))
+	cached := m.cachedDiskStates()
 
 	for _, file := range files {
-		slot := m.slots[file.Key]
-		prev := documentState{}
-		if slot != nil && slot.disk != nil {
-			prev = *slot.disk
-		}
-
-		if slot != nil && slot.disk != nil && slot.disk.size == file.Size && slot.disk.modTime.Equal(file.ModTime) {
-			next[file.Key] = nextDiskState{file: file, summary: slot.disk.summary}
+		if state, ok := cached[file.Key]; ok && sameScannedFileMetadata(state.file, file) {
+			next[file.Key] = state
 			continue
 		}
 
@@ -219,44 +284,55 @@ func (m *Manager) RescanWorkspaceWithReason(ctx context.Context, reason RebuildR
 		if sumErr != nil {
 			return sumErr
 		}
-		next[file.Key] = nextDiskState{file: file, summary: summary}
-		changed = append(changed, file.Key)
-		if prev.summary == nil {
-			fullRebuild = fullRebuild || (slot == nil || slot.active() == nil)
-		}
+		next[file.Key] = loadedDiskState{file: file, summary: summary}
 	}
 
-	for key, slot := range m.slots {
-		if slot.disk == nil {
-			continue
-		}
-		if _, ok := next[key]; ok {
-			continue
-		}
-		changed = append(changed, key)
-		if slot.open == nil {
-			fullRebuild = true
-		}
-		slot.disk = nil
-		if slot.active() == nil {
-			delete(m.slots, key)
-		}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	changed, fullRebuild := m.replaceDiskStatesLocked(next, diskSourceOpportunistic)
+	snapshot := m.snapshot.Load()
+	if len(changed) == 0 && snapshot != nil && snapshot.DiscoveryComplete {
+		return nil
+	}
+	m.publishLocked(changed, fullRebuild || snapshot == nil, reason, scanDuration, len(files), true)
+	return nil
+}
+
+// RefreshOpenDocumentClosureWithReason rebuilds the on-disk closure reachable from open documents.
+func (m *Manager) RefreshOpenDocumentClosureWithReason(ctx context.Context, reason RebuildReason) error {
+	if m == nil {
+		return errors.New("nil Manager")
 	}
 
-	for key, state := range next {
-		slot := m.ensureSlotLocked(key, state.file.DisplayURI)
-		slot.disk = &documentState{
-			input:   DocumentInput{URI: state.file.DisplayURI, Version: -1, Generation: 0},
-			summary: state.summary,
-			size:    state.file.Size,
-			modTime: state.file.ModTime,
-		}
+	start := time.Now()
+	cfg := resolverConfig{
+		roots:       slices.Clone(m.roots),
+		includeDirs: slices.Clone(m.includeDirs),
 	}
 
+	m.mu.Lock()
+	openDocs, discoveryComplete := m.openDocumentSeedsLocked()
+	m.mu.Unlock()
+	if discoveryComplete {
+		return nil
+	}
+
+	loaded, err := m.loadOpenDocumentClosure(ctx, cfg, openDocs)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.discoveryCompleteLocked() {
+		return nil
+	}
+
+	changed, fullRebuild := m.replaceDiskStatesLocked(loaded, diskSourceDirect)
 	if len(changed) == 0 && m.snapshot.Load() != nil {
 		return nil
 	}
-	m.publishLocked(changed, fullRebuild || m.snapshot.Load() == nil, reason, scanDuration, len(files))
+	m.publishLocked(changed, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), len(loaded), false)
 	return nil
 }
 
@@ -284,7 +360,13 @@ func (m *Manager) RefreshDocumentWithReason(ctx context.Context, uri string, del
 
 	slot := m.ensureSlotLocked(key, displayURI)
 	if deleted {
-		m.publishDiskRemovalLocked(key, slot, reason, start)
+		if !m.clearDiskStateLocked(key, slot) {
+			return nil
+		}
+		if slot.open != nil {
+			return nil
+		}
+		m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), 1, m.discoveryCompleteLocked())
 		return nil
 	}
 
@@ -293,7 +375,13 @@ func (m *Manager) RefreshDocumentWithReason(ctx context.Context, uri string, del
 		if !os.IsNotExist(statErr) {
 			return statErr
 		}
-		m.publishDiskRemovalLocked(key, slot, reason, start)
+		if !m.clearDiskStateLocked(key, slot) {
+			return nil
+		}
+		if slot.open != nil {
+			return nil
+		}
+		m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), 1, m.discoveryCompleteLocked())
 		return nil
 	}
 	if info.IsDir() {
@@ -313,14 +401,20 @@ func (m *Manager) RefreshDocumentWithReason(ctx context.Context, uri string, del
 	if err != nil {
 		return err
 	}
-	fullRebuild := slot.disk == nil
+	before := identityForState(slot.active())
 	slot.disk = &documentState{
 		input:   DocumentInput{URI: displayURI, Version: -1, Generation: 0},
 		summary: summary,
 		size:    info.Size(),
 		modTime: info.ModTime(),
 	}
-	m.publishLocked([]DocumentKey{key}, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), 1)
+	slot.sources.opportunistic = true
+	after := identityForState(slot.active())
+	if slot.open != nil || sameActiveIdentity(before, after) {
+		return nil
+	}
+	fullRebuild := !before.present || !after.present
+	m.publishLocked([]DocumentKey{key}, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), 1, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -347,24 +441,250 @@ func (m *Manager) ensureSlotLocked(key DocumentKey, displayURI string) *document
 }
 
 func (m *Manager) clearDiskStateLocked(key DocumentKey, slot *documentSlot) bool {
-	if slot.disk == nil {
+	if slot == nil || slot.disk == nil {
 		return false
 	}
 	slot.disk = nil
+	slot.sources = diskSources{}
 	if slot.active() == nil {
 		delete(m.slots, key)
 	}
 	return true
 }
 
-func (m *Manager) publishDiskRemovalLocked(key DocumentKey, slot *documentSlot, reason RebuildReason, start time.Time) {
-	if !m.clearDiskStateLocked(key, slot) {
-		return
+func (m *Manager) openDocumentSeedsLocked() (map[DocumentKey]*DocumentSummary, bool) {
+	openDocs := make(map[DocumentKey]*DocumentSummary)
+	for key, slot := range m.slots {
+		if slot == nil || slot.open == nil || slot.open.summary == nil {
+			continue
+		}
+		openDocs[key] = cloneSummary(slot.open.summary)
 	}
-	m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), 1)
+	return openDocs, m.discoveryCompleteLocked()
 }
 
-func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason RebuildReason, duration time.Duration, discoveredFiles int) {
+func (m *Manager) discoveryCompleteLocked() bool {
+	snapshot := m.snapshot.Load()
+	return snapshot != nil && snapshot.DiscoveryComplete
+}
+
+func (m *Manager) loadOpenDocumentClosure(ctx context.Context, cfg resolverConfig, openDocs map[DocumentKey]*DocumentSummary) (map[DocumentKey]loadedDiskState, error) {
+	ctx = contextOrBackground(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	loaded := make(map[DocumentKey]loadedDiskState)
+	queue := make([]*DocumentSummary, 0, len(openDocs))
+	for _, key := range sortedDocumentKeys(openDocs) {
+		queue = append(queue, openDocs[key])
+	}
+
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		doc := queue[0]
+		queue = queue[1:]
+		if doc == nil {
+			continue
+		}
+		for _, include := range doc.Includes {
+			file, ok, err := m.resolveIncludeFile(doc.URI, include.RawPath, cfg)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			if _, ok := openDocs[file.Key]; ok {
+				continue
+			}
+			if _, ok := loaded[file.Key]; ok {
+				continue
+			}
+
+			src, err := os.ReadFile(file.Path)
+			if err != nil {
+				return nil, fmt.Errorf("read %s: %w", file.Path, err)
+			}
+			in := DocumentInput{URI: file.DisplayURI, Version: -1, Generation: 0, Source: src}
+			summary, err := ParseAndSummarize(ctx, file.Key, in)
+			if err != nil {
+				return nil, err
+			}
+			loaded[file.Key] = loadedDiskState{file: file, summary: summary}
+			queue = append(queue, summary)
+		}
+	}
+	return loaded, nil
+}
+
+func (m *Manager) resolveIncludeFile(uri, rawPath string, cfg resolverConfig) (scannedFile, bool, error) {
+	includePath := unquoteMaybe(rawPath)
+	if strings.TrimSpace(includePath) == "" {
+		return scannedFile{}, false, nil
+	}
+
+	docPath, err := filePathFromDocumentURI(uri)
+	if err != nil {
+		return scannedFile{}, false, err
+	}
+	for _, base := range includeSearchCandidates(filepath.Dir(docPath), cfg.roots, cfg.includeDirs) {
+		candidate := filepath.Join(base, filepath.FromSlash(includePath))
+		info, err := os.Stat(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return scannedFile{}, false, err
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		displayURI, key, err := CanonicalizeDocumentURI(candidate)
+		if err != nil {
+			continue
+		}
+		resolvedPath, err := filePathFromDocumentURI(displayURI)
+		if err != nil {
+			return scannedFile{}, false, err
+		}
+		if !m.pathAllowed(resolvedPath) {
+			continue
+		}
+		return scannedFile{
+			Path:       resolvedPath,
+			DisplayURI: displayURI,
+			Key:        key,
+			Size:       info.Size(),
+			ModTime:    info.ModTime(),
+		}, true, nil
+	}
+	return scannedFile{}, false, nil
+}
+
+func (m *Manager) replaceDiskStatesLocked(next map[DocumentKey]loadedDiskState, kind diskSourceKind) ([]DocumentKey, bool) {
+	changed := make(map[DocumentKey]struct{}, len(next)+len(m.slots))
+	fullRebuild := false
+	affected := make(map[DocumentKey]struct{}, len(next)+len(m.slots))
+	for key, slot := range m.slots {
+		if slot == nil || !slot.hasSource(kind) {
+			continue
+		}
+		affected[key] = struct{}{}
+	}
+	for key := range next {
+		affected[key] = struct{}{}
+	}
+
+	before := make(map[DocumentKey]activeDocumentIdentity, len(affected))
+	for key := range affected {
+		before[key] = identityForState(m.slots[key].active())
+	}
+
+	for key := range affected {
+		slot := m.slots[key]
+		state, ok := next[key]
+		if !ok {
+			if slot == nil {
+				continue
+			}
+			slot.setSource(kind, false)
+			slot.clearDiskIfUnused()
+			if slot.active() == nil {
+				delete(m.slots, key)
+			}
+			continue
+		}
+
+		if slot == nil {
+			slot = m.ensureSlotLocked(key, state.file.DisplayURI)
+		}
+		slot.displayURI = state.file.DisplayURI
+		slot.setSource(kind, true)
+		if sameLoadedDiskState(slot.disk, state) {
+			continue
+		}
+		slot.disk = &documentState{
+			input:   DocumentInput{URI: state.file.DisplayURI, Version: -1, Generation: 0},
+			summary: state.summary,
+			size:    state.file.Size,
+			modTime: state.file.ModTime,
+		}
+	}
+
+	for key, prev := range before {
+		slot := m.slots[key]
+		nextIdentity := identityForState(nil)
+		if slot != nil {
+			nextIdentity = identityForState(slot.active())
+		}
+		if sameActiveIdentity(prev, nextIdentity) {
+			continue
+		}
+		changed[key] = struct{}{}
+		if prev.present != nextIdentity.present {
+			fullRebuild = true
+		}
+	}
+
+	out := make([]DocumentKey, 0, len(changed))
+	for key := range changed {
+		out = append(out, key)
+	}
+	slices.Sort(out)
+	return out, fullRebuild
+}
+
+func sameLoadedDiskState(current *documentState, next loadedDiskState) bool {
+	if current == nil || current.summary == nil || next.summary == nil {
+		return false
+	}
+	return current.input.URI == next.file.DisplayURI &&
+		current.size == next.file.Size &&
+		current.modTime.Equal(next.file.ModTime) &&
+		current.summary.ContentHash == next.summary.ContentHash
+}
+
+func sameScannedFileMetadata(a, b scannedFile) bool {
+	return a.Key == b.Key && a.DisplayURI == b.DisplayURI && a.Size == b.Size && a.ModTime.Equal(b.ModTime)
+}
+
+func (m *Manager) cachedDiskStates() map[DocumentKey]loadedDiskState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make(map[DocumentKey]loadedDiskState, len(m.slots))
+	for key, slot := range m.slots {
+		if slot == nil || slot.disk == nil || slot.disk.summary == nil {
+			continue
+		}
+		out[key] = loadedDiskState{
+			file: scannedFile{
+				Path:       documentPathOrEmpty(slot.disk.input.URI),
+				DisplayURI: slot.disk.input.URI,
+				Key:        key,
+				Size:       slot.disk.size,
+				ModTime:    slot.disk.modTime,
+			},
+			summary: slot.disk.summary,
+		}
+	}
+	return out
+}
+
+func documentPathOrEmpty(uri string) string {
+	path, err := filePathFromDocumentURI(uri)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason RebuildReason, duration time.Duration, discoveredFiles int, discoveryComplete bool) {
 	prev := m.snapshot.Load()
 	baseDocs := make(map[DocumentKey]*DocumentSummary, len(m.slots))
 	for key, slot := range m.slots {
@@ -382,7 +702,7 @@ func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason 
 	next := buildSnapshot(prev, baseDocs, changed, fullRebuild, resolverConfig{
 		roots:       slices.Clone(m.roots),
 		includeDirs: slices.Clone(m.includeDirs),
-	})
+	}, discoveryComplete)
 	m.snapshot.Store(next)
 	scanDuration := time.Duration(0)
 	if discoveredFiles > 0 {
@@ -400,7 +720,7 @@ func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason 
 	})
 }
 
-func buildSnapshot(prev *WorkspaceSnapshot, baseDocs map[DocumentKey]*DocumentSummary, changed []DocumentKey, fullRebuild bool, cfg resolverConfig) *WorkspaceSnapshot {
+func buildSnapshot(prev *WorkspaceSnapshot, baseDocs map[DocumentKey]*DocumentSummary, changed []DocumentKey, fullRebuild bool, cfg resolverConfig, discoveryComplete bool) *WorkspaceSnapshot {
 	if fullRebuild || prev == nil {
 		changed = sortedDocumentKeys(baseDocs)
 	}
@@ -467,14 +787,15 @@ func buildSnapshot(prev *WorkspaceSnapshot, baseDocs map[DocumentKey]*DocumentSu
 		nextGen = prev.Generation + 1
 	}
 	return &WorkspaceSnapshot{
-		Generation:     nextGen,
-		Documents:      docs,
-		SymbolsByID:    symbolsByID,
-		SymbolsByQName: symbolsByQName,
-		RefsByTarget:   refsByTarget,
-		IncludeGraph:   graph,
-		ReverseDeps:    graph.Reverse,
-		SnapshotIssues: issues,
+		Generation:        nextGen,
+		DiscoveryComplete: discoveryComplete,
+		Documents:         docs,
+		SymbolsByID:       symbolsByID,
+		SymbolsByQName:    symbolsByQName,
+		RefsByTarget:      refsByTarget,
+		IncludeGraph:      graph,
+		ReverseDeps:       graph.Reverse,
+		SnapshotIssues:    issues,
 	}
 }
 
@@ -544,11 +865,10 @@ func normalizeRootPaths(in []string) []string {
 		if raw == "" {
 			continue
 		}
-		abs, err := filepath.Abs(raw)
+		abs, err := normalizeRuntimePath(raw)
 		if err != nil {
 			continue
 		}
-		abs = filepath.Clean(abs)
 		if _, ok := seen[abs]; ok {
 			continue
 		}
@@ -562,7 +882,15 @@ func normalizeIncludeDirs(in []string) []string {
 	out := make([]string, 0, len(in))
 	seen := make(map[string]struct{})
 	for _, raw := range in {
-		raw = filepath.Clean(strings.TrimSpace(raw))
+		raw = strings.TrimSpace(raw)
+		if filepath.IsAbs(raw) {
+			normalized, err := normalizeRuntimePath(raw)
+			if err == nil {
+				raw = normalized
+			}
+		} else {
+			raw = filepath.Clean(raw)
+		}
 		if raw == "." || raw == "" {
 			continue
 		}
@@ -585,7 +913,15 @@ func (m *Manager) rescanLoop() {
 			return
 		case <-m.rescanReset:
 		case <-timer.C:
-			_ = m.RescanWorkspaceWithReason(context.Background(), RebuildReasonPeriodic)
+			snapshot := m.snapshot.Load()
+			switch {
+			case snapshot == nil:
+			case snapshot.DiscoveryComplete:
+				_ = m.RescanWorkspaceWithReason(context.Background(), RebuildReasonPeriodic)
+			default:
+				_ = m.RefreshOpenDocumentClosureWithReason(context.Background(), RebuildReasonPeriodic)
+				_ = m.RescanWorkspaceWithReason(context.Background(), RebuildReasonPeriodic)
+			}
 		}
 
 		interval := time.Duration(m.rescanInterval.Load())

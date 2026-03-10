@@ -175,14 +175,15 @@ type IncludeGraph struct {
 
 // WorkspaceSnapshot is the published immutable workspace index view.
 type WorkspaceSnapshot struct {
-	Generation     uint64
-	Documents      map[DocumentKey]*DocumentSummary
-	SymbolsByID    map[SymbolID]Symbol
-	SymbolsByQName map[QualifiedName][]SymbolID
-	RefsByTarget   map[SymbolID][]ReferenceSiteID
-	IncludeGraph   IncludeGraph
-	ReverseDeps    map[DocumentKey][]DocumentKey
-	SnapshotIssues []IndexDiagnostic
+	Generation        uint64
+	DiscoveryComplete bool
+	Documents         map[DocumentKey]*DocumentSummary
+	SymbolsByID       map[SymbolID]Symbol
+	SymbolsByQName    map[QualifiedName][]SymbolID
+	RefsByTarget      map[SymbolID][]ReferenceSiteID
+	IncludeGraph      IncludeGraph
+	ReverseDeps       map[DocumentKey][]DocumentKey
+	SnapshotIssues    []IndexDiagnostic
 }
 
 // DocumentView binds one document summary to its containing snapshot.
@@ -219,6 +220,7 @@ type QueryMeta struct {
 	DocumentURI         string
 	DocumentVersion     int32
 	DocumentGeneration  uint64
+	DiscoveryComplete   bool
 }
 
 // PrepareRenameResult describes a prepare-rename result or blockers.
@@ -250,4 +252,6 @@ var (
 	ErrRenameBlocked = errors.New("rename blocked")
 	// ErrWorkspaceClosed reports that no workspace snapshot is currently available.
 	ErrWorkspaceClosed = errors.New("workspace snapshot unavailable")
+	// ErrWorkspaceIncomplete reports that the loaded workspace graph is not complete enough for an exact answer.
+	ErrWorkspaceIncomplete = errors.New("workspace discovery incomplete")
 )

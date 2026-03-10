@@ -1462,6 +1462,9 @@ func TestServerRunWorkspaceFolderChangesReconfigureManager(t *testing.T) {
 	root2 := testutil.CopyWorkspaceFixture(t, "rename")
 	root1URI := mustCanonicalURI(t, root1)
 	root2URI := mustCanonicalURI(t, root2)
+	root2MainPath := filepath.Join(root2, "main.thrift")
+	root2MainURI := mustCanonicalURI(t, root2MainPath)
+	root2MainText := string(testutil.ReadFile(t, root2MainPath))
 
 	var in bytes.Buffer
 	writeReqFrame(t, &in, Request{
@@ -1490,6 +1493,13 @@ func TestServerRunWorkspaceFolderChangesReconfigureManager(t *testing.T) {
 	})
 	writeReqFrame(t, &in, Request{
 		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: root2MainURI, Version: 1, Text: root2MainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
 		ID:      json.RawMessage(`132`),
 		Method:  "workspace/symbol",
 		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "Holder"}),
@@ -1507,8 +1517,8 @@ func TestServerRunWorkspaceFolderChangesReconfigureManager(t *testing.T) {
 	}
 	var beforeSymbols []SymbolInformation
 	marshalRoundtrip(t, before.Result, &beforeSymbols)
-	if len(beforeSymbols) != 1 || beforeSymbols[0].Name != "ParentService" {
-		t.Fatalf("workspace symbols before=%+v, want ParentService", beforeSymbols)
+	if len(beforeSymbols) != 0 {
+		t.Fatalf("workspace symbols before=%+v, want empty before any document is loaded", beforeSymbols)
 	}
 
 	after := responseByID(t, msgs, "132")
