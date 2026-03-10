@@ -746,14 +746,15 @@ func buildSnapshot(prev *WorkspaceSnapshot, baseDocs map[DocumentKey]*DocumentSu
 		docs[key] = cloneSummary(base)
 	}
 
+	includeResolver := newIncludeResolver(cfg, docs)
 	if fullRebuild || prev == nil {
 		for _, key := range sortedDocumentKeys(docs) {
-			resolveIncludesForSummary(docs[key], cfg, docs)
+			resolveIncludesForSummary(docs[key], includeResolver)
 		}
 	} else {
 		for key := range impacted {
 			if doc := docs[key]; doc != nil {
-				resolveIncludesForSummary(doc, cfg, docs)
+				resolveIncludesForSummary(doc, includeResolver)
 			}
 		}
 	}

@@ -17,6 +17,8 @@ type canonicalizeOptions struct {
 	caseInsensitive bool
 }
 
+var runtimeCaseInsensitive = filesystemCaseInsensitive(runtime.GOOS)
+
 // CanonicalizeDocumentURI canonicalizes a file URI or filesystem path into a display URI and key.
 func CanonicalizeDocumentURI(raw string) (string, DocumentKey, error) {
 	return canonicalizeDocumentURIWithOptions(raw, runtimeCanonicalizeOptions())
@@ -25,7 +27,7 @@ func CanonicalizeDocumentURI(raw string) (string, DocumentKey, error) {
 func runtimeCanonicalizeOptions() canonicalizeOptions {
 	return canonicalizeOptions{
 		goos:            runtime.GOOS,
-		caseInsensitive: filesystemCaseInsensitive(runtime.GOOS),
+		caseInsensitive: runtimeCaseInsensitive,
 	}.withDefaults()
 }
 
@@ -60,9 +62,6 @@ func normalizeInputPath(raw string, opts canonicalizeOptions) (string, error) {
 func (opts canonicalizeOptions) withDefaults() canonicalizeOptions {
 	if opts.goos == "" {
 		opts.goos = runtime.GOOS
-	}
-	if opts.cwd == "" {
-		opts.cwd, _ = os.Getwd()
 	}
 	return opts
 }
@@ -113,10 +112,12 @@ func normalizePortableWindowsPath(inputPath, cwd string) (string, error) {
 	case strings.HasPrefix(slash, "/") && len(slash) >= 3 && isASCIILetter(slash[1]) && slash[2] == ':':
 		slash = slash[1:]
 	case looksLikeWindowsAbsolutePath(slash), strings.HasPrefix(slash, "//"):
-	case cwd != "":
-		slash = pathpkg.Join(strings.ReplaceAll(cwd, `\`, "/"), slash)
 	default:
-		return "", fmt.Errorf("relative windows path %q requires cwd", inputPath)
+		cwd = runtimeWorkingDirectory(cwd)
+		if cwd == "" {
+			return "", fmt.Errorf("relative windows path %q requires cwd", inputPath)
+		}
+		slash = pathpkg.Join(strings.ReplaceAll(cwd, `\`, "/"), slash)
 	}
 
 	slash = pathpkg.Clean(slash)
@@ -129,9 +130,18 @@ func normalizePortableWindowsPath(inputPath, cwd string) (string, error) {
 func normalizePortablePOSIXPath(inputPath, cwd string) string {
 	slash := strings.ReplaceAll(strings.TrimSpace(inputPath), `\`, "/")
 	if !strings.HasPrefix(slash, "/") {
+		cwd = runtimeWorkingDirectory(cwd)
 		slash = pathpkg.Join(filepath.ToSlash(cwd), slash)
 	}
 	return filepath.Clean(filepath.FromSlash(pathpkg.Clean(slash)))
+}
+
+func runtimeWorkingDirectory(cwd string) string {
+	if cwd != "" {
+		return cwd
+	}
+	cwd, _ = os.Getwd()
+	return cwd
 }
 
 func fileURIPathToOSPath(u *url.URL, goos string) string {

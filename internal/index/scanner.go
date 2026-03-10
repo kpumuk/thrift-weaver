@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -232,11 +233,7 @@ func walkWorkspaceFile(path string, d os.DirEntry, matchersByDir map[string][]*g
 		return fmt.Errorf("workspace file exceeds size limit: %s (%d > %d)", path, info.Size(), maxFileBytes)
 	}
 
-	displayURI, key, err := CanonicalizeDocumentURI(path)
-	if err != nil {
-		return err
-	}
-	resolvedPath, err := filePathFromDocumentURI(displayURI)
+	resolvedPath, displayURI, key, err := canonicalizeScannedWorkspacePath(path, d)
 	if err != nil {
 		return err
 	}
@@ -249,13 +246,32 @@ func walkWorkspaceFile(path string, d os.DirEntry, matchersByDir map[string][]*g
 
 	seen[key] = struct{}{}
 	*out = append(*out, scannedFile{
-		Path:       path,
+		Path:       resolvedPath,
 		DisplayURI: displayURI,
 		Key:        key,
 		Size:       info.Size(),
 		ModTime:    info.ModTime(),
 	})
 	return nil
+}
+
+func canonicalizeScannedWorkspacePath(path string, d os.DirEntry) (resolvedPath string, displayURI string, key DocumentKey, err error) {
+	resolvedPath = filepath.Clean(path)
+	if d == nil || d.Type()&os.ModeSymlink != 0 {
+		displayURI, key, err = CanonicalizeDocumentURI(resolvedPath)
+		if err != nil {
+			return "", "", "", err
+		}
+		resolvedPath, err = filePathFromDocumentURI(displayURI)
+		if err != nil {
+			return "", "", "", err
+		}
+		return resolvedPath, displayURI, key, nil
+	}
+
+	displayURI = fileURIFromPathForOS(resolvedPath, runtime.GOOS)
+	key = documentKeyForDisplayURIWithCase(displayURI, runtimeCaseInsensitive)
+	return resolvedPath, displayURI, key, nil
 }
 
 type gitIgnoreMatcher struct {

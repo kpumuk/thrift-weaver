@@ -15,7 +15,50 @@ type resolverConfig struct {
 	includeDirs []string
 }
 
-func resolveIncludesForSummary(summary *DocumentSummary, cfg resolverConfig, docs map[DocumentKey]*DocumentSummary) {
+type resolvedIncludeTarget struct {
+	uri string
+	key DocumentKey
+}
+
+type includeLookupResult struct {
+	target resolvedIncludeTarget
+	ok     bool
+}
+
+type includeResolver struct {
+	cfg                 resolverConfig
+	docs                map[DocumentKey]*DocumentSummary
+	docDirsByURI        map[string]string
+	docTargetsByPath    map[string]resolvedIncludeTarget
+	candidatesByDocDir  map[string][]string
+	canonicalizedLookup map[string]includeLookupResult
+}
+
+func newIncludeResolver(cfg resolverConfig, docs map[DocumentKey]*DocumentSummary) *includeResolver {
+	resolver := &includeResolver{
+		cfg:                 cfg,
+		docs:                docs,
+		docDirsByURI:        make(map[string]string, len(docs)),
+		docTargetsByPath:    make(map[string]resolvedIncludeTarget, len(docs)),
+		candidatesByDocDir:  make(map[string][]string),
+		canonicalizedLookup: make(map[string]includeLookupResult),
+	}
+	for key, doc := range docs {
+		if doc == nil {
+			continue
+		}
+		path, err := filePathFromDocumentURI(doc.URI)
+		if err != nil {
+			continue
+		}
+		path = filepath.Clean(path)
+		resolver.docDirsByURI[doc.URI] = filepath.Dir(path)
+		resolver.docTargetsByPath[path] = resolvedIncludeTarget{uri: doc.URI, key: key}
+	}
+	return resolver
+}
+
+func resolveIncludesForSummary(summary *DocumentSummary, resolver *includeResolver) {
 	if summary == nil {
 		return
 	}
@@ -26,7 +69,7 @@ func resolveIncludesForSummary(summary *DocumentSummary, cfg resolverConfig, doc
 		edge := &summary.Includes[i]
 		aliasCounts[edge.Alias]++
 
-		resolvedURI, resolvedKey, ok := resolveIncludePath(summary.URI, edge.RawPath, cfg, docs)
+		resolvedURI, resolvedKey, ok := resolver.resolveIncludePath(summary.URI, edge.RawPath)
 		if !ok {
 			edge.ResolvedURI = ""
 			edge.ResolvedKey = ""
@@ -73,28 +116,89 @@ func resolveIncludesForSummary(summary *DocumentSummary, cfg resolverConfig, doc
 	}
 }
 
-func resolveIncludePath(uri string, rawPath string, cfg resolverConfig, docs map[DocumentKey]*DocumentSummary) (string, DocumentKey, bool) {
+func (r *includeResolver) resolveIncludePath(uri string, rawPath string) (string, DocumentKey, bool) {
+	if r == nil {
+		return "", "", false
+	}
 	includePath := unquoteMaybe(rawPath)
 	if strings.TrimSpace(includePath) == "" {
 		return "", "", false
 	}
 
-	docPath, err := filePathFromDocumentURI(uri)
-	if err != nil {
+	docDir, ok := r.documentDir(uri)
+	if !ok {
 		return "", "", false
 	}
-	candidates := includeSearchCandidates(filepath.Dir(docPath), cfg.roots, cfg.includeDirs)
-	for _, base := range candidates {
+	for _, base := range r.includeSearchCandidates(docDir) {
 		candidate := filepath.Join(base, filepath.FromSlash(includePath))
-		displayURI, key, err := CanonicalizeDocumentURI(candidate)
-		if err != nil {
-			continue
-		}
-		if _, ok := docs[key]; ok {
-			return displayURI, key, true
+		if target, ok := r.resolveCandidatePath(candidate); ok {
+			return target.uri, target.key, true
 		}
 	}
 	return "", "", false
+}
+
+func (r *includeResolver) documentDir(uri string) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	if docDir, ok := r.docDirsByURI[uri]; ok {
+		return docDir, true
+	}
+	path, err := filePathFromDocumentURI(uri)
+	if err != nil {
+		return "", false
+	}
+	docDir := filepath.Dir(filepath.Clean(path))
+	r.docDirsByURI[uri] = docDir
+	return docDir, true
+}
+
+func (r *includeResolver) includeSearchCandidates(docDir string) []string {
+	if r == nil {
+		return nil
+	}
+	docDir = filepath.Clean(docDir)
+	if candidates, ok := r.candidatesByDocDir[docDir]; ok {
+		return candidates
+	}
+	candidates := includeSearchCandidates(docDir, r.cfg.roots, r.cfg.includeDirs)
+	r.candidatesByDocDir[docDir] = candidates
+	return candidates
+}
+
+func (r *includeResolver) resolveCandidatePath(candidate string) (resolvedIncludeTarget, bool) {
+	if r == nil {
+		return resolvedIncludeTarget{}, false
+	}
+	candidate = filepath.Clean(candidate)
+	if target, ok := r.docTargetsByPath[candidate]; ok {
+		return target, true
+	}
+	if result, ok := r.canonicalizedLookup[candidate]; ok {
+		return result.target, result.ok
+	}
+
+	_, key, err := CanonicalizeDocumentURI(candidate)
+	if err != nil {
+		r.canonicalizedLookup[candidate] = includeLookupResult{}
+		return resolvedIncludeTarget{}, false
+	}
+	doc, ok := r.docs[key]
+	if !ok || doc == nil {
+		r.canonicalizedLookup[candidate] = includeLookupResult{}
+		return resolvedIncludeTarget{}, false
+	}
+
+	target := resolvedIncludeTarget{uri: doc.URI}
+	if doc.Key != "" {
+		target.key = doc.Key
+	} else {
+		target.key = key
+	}
+	r.docTargetsByPath[candidate] = target
+	r.canonicalizedLookup[candidate] = includeLookupResult{target: target, ok: true}
+	return target, true
 }
 
 func includeSearchCandidates(docDir string, roots []string, includeDirs []string) []string {
