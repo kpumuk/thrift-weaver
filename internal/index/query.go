@@ -31,10 +31,14 @@ func (m *Manager) Definition(ctx context.Context, doc QueryDocument, pos text.UT
 	start := time.Now()
 	defer func() { m.observeQuery("definition", start, meta) }()
 
-	qctx, symbol, err := m.queryTargetSymbol(ctx, doc, pos)
+	qctx, err := m.queryDocumentContext(ctx, doc, pos)
 	if err != nil {
 		return nil, qctx.meta, err
 	}
+	if location, ok := includeLocationAtOffset(qctx.view.Document, qctx.offset); ok {
+		return []Location{location}, qctx.meta, nil
+	}
+	symbol := targetSymbolAtOffset(qctx)
 	if symbol == nil {
 		return []Location{}, qctx.meta, nil
 	}
@@ -190,19 +194,22 @@ func (m *Manager) queryTargetSymbol(ctx context.Context, doc QueryDocument, pos 
 	if err != nil {
 		return qctx, nil, err
 	}
+	return qctx, targetSymbolAtOffset(qctx), nil
+}
 
+func targetSymbolAtOffset(qctx queryContext) *Symbol {
 	if symbol, ok := declarationAtOffset(qctx.view.Document, qctx.offset); ok {
-		return qctx, &symbol, nil
+		return &symbol
 	}
 	ref, ok := referenceAtOffset(qctx.view.Document, qctx.offset)
 	if !ok || ref.Binding.Status != BindingStatusBound {
-		return qctx, nil, nil
+		return nil
 	}
 	symbol, ok := qctx.snapshot.SymbolsByID[ref.Binding.Target]
 	if !ok {
-		return qctx, nil, nil
+		return nil
 	}
-	return qctx, &symbol, nil
+	return &symbol
 }
 
 func (m *Manager) queryRenameTarget(ctx context.Context, doc QueryDocument, pos text.UTF16Position) (queryContext, *renameTarget, []IndexDiagnostic, error) {
@@ -556,6 +563,21 @@ func referenceAtOffset(doc *DocumentSummary, offset text.ByteOffset) (ReferenceS
 		}
 	}
 	return ReferenceSite{}, false
+}
+
+func includeLocationAtOffset(doc *DocumentSummary, offset text.ByteOffset) (Location, bool) {
+	if doc == nil {
+		return Location{}, false
+	}
+	for _, include := range doc.Includes {
+		if include.Status != IncludeStatusResolved || include.ResolvedURI == "" {
+			continue
+		}
+		if include.Span.Contains(offset) {
+			return Location{URI: include.ResolvedURI, Span: text.Span{}}, true
+		}
+	}
+	return Location{}, false
 }
 
 func referenceByID(snapshot *WorkspaceSnapshot, id ReferenceSiteID) (ReferenceSite, bool) {

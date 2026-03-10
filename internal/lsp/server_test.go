@@ -876,7 +876,25 @@ func TestServerNavigationQueriesUseLoadedGraphBeforeDiscoveryCompletes(t *testin
 
 	root, s, _, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
 	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+	includePos := mustLSPPositionForSubstring(t, mainText, "types.thrift")
 	userPos := mustLSPPositionForSubstring(t, mainText, "types.User input")
+
+	includeDefinitions, err := s.Definition(context.Background(), DefinitionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     includePos,
+	})
+	if err != nil {
+		t.Fatalf("Definition on include: %v", err)
+	}
+	if len(includeDefinitions) != 1 {
+		t.Fatalf("include definition count=%d, want 1", len(includeDefinitions))
+	}
+	if includeDefinitions[0].URI != typesURI {
+		t.Fatalf("include definition URI=%q, want %q", includeDefinitions[0].URI, typesURI)
+	}
+	if includeDefinitions[0].Range.Start != (Position{}) || includeDefinitions[0].Range.End != (Position{}) {
+		t.Fatalf("include definition range=%+v, want file start", includeDefinitions[0].Range)
+	}
 
 	definitions, err := s.Definition(context.Background(), DefinitionParams{
 		TextDocument: TextDocumentIdentifier{URI: mainURI},

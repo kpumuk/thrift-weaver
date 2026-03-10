@@ -24,9 +24,30 @@ func TestManagerDefinitionReferencesAndWorkspaceSymbols(t *testing.T) {
 
 	mainPath := filepath.Join(root, "main.thrift")
 	typesPath := filepath.Join(root, "types.thrift")
-	mainDoc := mustDocument(t, mustSnapshot(t, m), mainPath)
+	snapshot := mustSnapshot(t, m)
+	mainDoc := mustDocument(t, snapshot, mainPath)
+	typesDoc := mustDocument(t, snapshot, typesPath)
 	mainSource := testutil.ReadFile(t, mainPath)
+	includePos := mustUTF16PositionForSubstring(t, mainSource, "types.thrift")
 	userRefPos := mustUTF16PositionForSubstring(t, mainSource, "types.User input")
+
+	includeDefinitions, _, err := m.Definition(context.Background(), QueryDocument{
+		URI:        mainDoc.URI,
+		Version:    mainDoc.Version,
+		Generation: mainDoc.Generation,
+	}, includePos)
+	if err != nil {
+		t.Fatalf("Definition on include: %v", err)
+	}
+	if len(includeDefinitions) != 1 {
+		t.Fatalf("len(Definition on include)=%d, want 1", len(includeDefinitions))
+	}
+	if includeDefinitions[0].URI != typesDoc.URI {
+		t.Fatalf("include definition URI=%q, want %q", includeDefinitions[0].URI, typesDoc.URI)
+	}
+	if includeDefinitions[0].Span != (text.Span{}) {
+		t.Fatalf("include definition span=%v, want file start", includeDefinitions[0].Span)
+	}
 
 	definitions, _, err := m.Definition(context.Background(), QueryDocument{
 		URI:        mainDoc.URI,
@@ -43,7 +64,6 @@ func TestManagerDefinitionReferencesAndWorkspaceSymbols(t *testing.T) {
 		t.Fatalf("definition text=%q, want %q", got, "User")
 	}
 
-	typesDoc := mustDocument(t, mustSnapshot(t, m), typesPath)
 	declPos := mustUTF16PositionForSubstring(t, testutil.ReadFile(t, typesPath), "User {")
 	references, _, err := m.References(context.Background(), QueryDocument{
 		URI:        typesDoc.URI,
