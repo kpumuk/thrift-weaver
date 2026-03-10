@@ -26,6 +26,8 @@ type Server struct {
 	store *SnapshotStore
 	lint  *lint.Runner
 
+	workspaceIndexWorkers int
+
 	mu            sync.Mutex
 	shutdown      bool
 	exitRequested bool
@@ -88,17 +90,28 @@ type documentDiagnostics struct {
 
 const defaultLintDebounce = 150 * time.Millisecond
 
+// Options configures process-wide LSP server behavior.
+type Options struct {
+	WorkspaceIndexWorkers int
+}
+
 // NewServer creates a new LSP server instance.
 func NewServer() *Server {
+	return NewServerWithOptions(Options{})
+}
+
+// NewServerWithOptions creates a new LSP server instance with explicit options.
+func NewServerWithOptions(opts Options) *Server {
 	return &Server{
-		store:             NewSnapshotStore(),
-		lint:              lint.NewDefaultRunner(),
-		requestCancels:    make(map[string]context.CancelFunc),
-		pendingCancelled:  make(map[string]struct{}),
-		lintDebounce:      defaultLintDebounce,
-		lintJobs:          make(map[string]lintJobState),
-		workspaceLintJobs: make(map[string]lintJobState),
-		diagnostics:       make(map[string]documentDiagnostics),
+		store:                 NewSnapshotStore(),
+		lint:                  lint.NewDefaultRunner(),
+		workspaceIndexWorkers: opts.WorkspaceIndexWorkers,
+		requestCancels:        make(map[string]context.CancelFunc),
+		pendingCancelled:      make(map[string]struct{}),
+		lintDebounce:          defaultLintDebounce,
+		lintJobs:              make(map[string]lintJobState),
+		workspaceLintJobs:     make(map[string]lintJobState),
+		diagnostics:           make(map[string]documentDiagnostics),
 	}
 }
 
@@ -636,6 +649,7 @@ func (s *Server) configureWorkspaceFolders(ctx context.Context, folders []Worksp
 func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) error {
 	manager := index.NewManager(index.Options{
 		WorkspaceRoots: roots,
+		ParseWorkers:   s.workspaceIndexWorkers,
 		Hooks:          s.workspaceIndexHooks(),
 	})
 

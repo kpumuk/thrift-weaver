@@ -32,6 +32,21 @@ func ParseAndSummarize(ctx context.Context, key DocumentKey, in DocumentInput) (
 	return SummarizeTree(key, in, tree)
 }
 
+// ParseAndSummarizeWithParser parses a document through a reusable full parser
+// and extracts its summary.
+func ParseAndSummarizeWithParser(ctx context.Context, parser *syntax.ReusableParser, key DocumentKey, in DocumentInput) (*DocumentSummary, error) {
+	if parser == nil {
+		return ParseAndSummarize(ctx, key, in)
+	}
+
+	tree, err := parser.Parse(ctx, in.Source, syntax.ParseOptions{URI: in.URI, Version: in.Version})
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	return SummarizeTree(key, in, tree)
+}
+
 // SummarizeTree extracts a document summary from a parsed syntax tree.
 func SummarizeTree(key DocumentKey, in DocumentInput, tree *syntax.Tree) (*DocumentSummary, error) {
 	if tree == nil {

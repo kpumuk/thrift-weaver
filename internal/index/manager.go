@@ -3,15 +3,17 @@ package index
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kpumuk/thrift-weaver/internal/syntax"
 )
 
 const (
@@ -128,12 +130,13 @@ func sameActiveIdentity(a, b activeDocumentIdentity) bool {
 type Manager struct {
 	mu sync.Mutex
 
-	roots       []string
-	includeDirs []string
-	maxFiles    int
-	maxFileSize int64
-	onEvent     func(Event)
-	queueDepth  func() int
+	roots        []string
+	includeDirs  []string
+	maxFiles     int
+	maxFileSize  int64
+	parseWorkers int
+	onEvent      func(Event)
+	queueDepth   func() int
 
 	slots map[DocumentKey]*documentSlot
 
@@ -157,21 +160,30 @@ func NewManager(opts Options) *Manager {
 	if maxFileSize <= 0 {
 		maxFileSize = defaultMaxFileBytes
 	}
+	parseWorkers := normalizeParseWorkers(opts.ParseWorkers)
 
 	m := &Manager{
-		roots:       roots,
-		includeDirs: includeDirs,
-		maxFiles:    maxFiles,
-		maxFileSize: maxFileSize,
-		onEvent:     opts.Hooks.OnEvent,
-		queueDepth:  opts.Hooks.QueueDepth,
-		slots:       make(map[DocumentKey]*documentSlot),
-		rescanReset: make(chan struct{}, 1),
-		closeCh:     make(chan struct{}),
+		roots:        roots,
+		includeDirs:  includeDirs,
+		maxFiles:     maxFiles,
+		maxFileSize:  maxFileSize,
+		parseWorkers: parseWorkers,
+		onEvent:      opts.Hooks.OnEvent,
+		queueDepth:   opts.Hooks.QueueDepth,
+		slots:        make(map[DocumentKey]*documentSlot),
+		rescanReset:  make(chan struct{}, 1),
+		closeCh:      make(chan struct{}),
 	}
 	m.rescanInterval.Store(int64(defaultRescanInterval))
 	go m.rescanLoop()
 	return m
+}
+
+func normalizeParseWorkers(workers int) int {
+	if workers > 0 {
+		return workers
+	}
+	return min(max(runtime.GOMAXPROCS(0), 1), 4)
 }
 
 // Close stops the background rescan loop.
@@ -268,25 +280,10 @@ func (m *Manager) RescanWorkspaceWithReason(ctx context.Context, reason RebuildR
 	}
 	scanDuration := time.Since(start)
 
-	next := make(map[DocumentKey]loadedDiskState, len(result.files))
 	cached := m.cachedDiskStates()
-
-	for _, file := range result.files {
-		if state, ok := cached[file.Key]; ok && sameScannedFileMetadata(state.file, file) {
-			next[file.Key] = state
-			continue
-		}
-
-		src, readErr := os.ReadFile(file.Path)
-		if readErr != nil {
-			return fmt.Errorf("read %s: %w", file.Path, readErr)
-		}
-		in := DocumentInput{URI: file.DisplayURI, Version: -1, Generation: 0, Source: src}
-		summary, sumErr := ParseAndSummarize(ctx, file.Key, in)
-		if sumErr != nil {
-			return sumErr
-		}
-		next[file.Key] = loadedDiskState{file: file, summary: summary}
+	next, err := m.summarizeScannedFiles(ctx, result.files, cached)
+	if err != nil {
+		return err
 	}
 
 	m.mu.Lock()
@@ -480,6 +477,9 @@ func (m *Manager) loadOpenDocumentClosure(ctx context.Context, cfg resolverConfi
 		return nil, err
 	}
 
+	parser := syntax.NewReusableParser()
+	defer parser.Close()
+
 	loaded := make(map[DocumentKey]loadedDiskState)
 	queue := make([]*DocumentSummary, 0, len(openDocs))
 	for _, key := range sortedDocumentKeys(openDocs) {
@@ -511,17 +511,12 @@ func (m *Manager) loadOpenDocumentClosure(ctx context.Context, cfg resolverConfi
 				continue
 			}
 
-			src, err := os.ReadFile(file.Path)
-			if err != nil {
-				return nil, fmt.Errorf("read %s: %w", file.Path, err)
-			}
-			in := DocumentInput{URI: file.DisplayURI, Version: -1, Generation: 0, Source: src}
-			summary, err := ParseAndSummarize(ctx, file.Key, in)
+			state, err := summarizeScannedFile(ctx, parser, file)
 			if err != nil {
 				return nil, err
 			}
-			loaded[file.Key] = loadedDiskState{file: file, summary: summary}
-			queue = append(queue, summary)
+			loaded[file.Key] = state
+			queue = append(queue, state.summary)
 		}
 	}
 	return loaded, nil

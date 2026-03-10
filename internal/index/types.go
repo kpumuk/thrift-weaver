@@ -73,6 +73,7 @@ type Options struct {
 	IncludeDirs    []string
 	MaxFiles       int
 	MaxFileBytes   int64
+	ParseWorkers   int
 	Hooks          Hooks
 }
 

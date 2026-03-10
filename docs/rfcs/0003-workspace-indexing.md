@@ -548,6 +548,7 @@ type Options struct {
     IncludeDirs    []string
     MaxFiles       int   // default 10000
     MaxFileBytes   int64 // default 2 MiB per file
+    ParseWorkers   int   // 0 = auto, >0 = explicit bounded worker count
 }
 
 type Manager struct { /* internal state */ }
@@ -705,6 +706,8 @@ Protocol rules:
 - `workspace/symbol` searches the currently loaded graph and may widen results as opportunistic discovery progresses
 - stale, incomplete, or blocked rename operations return `RequestFailed` with a concrete reason
 - `workspace/didChangeWatchedFiles` events trigger targeted rescans for affected loaded URIs and may enqueue further background discovery work
+- workspace-wide discovery may use a bounded parse worker pool; each worker owns one reusable parser instance and parses files sequentially within that worker
+- `thriftls` may expose the workspace parse worker count as startup configuration; editor clients may surface that as a first-class setting
 
 ## CLI Changes
 
@@ -740,6 +743,13 @@ Targets for a warm local session:
 - explicit workspace discovery of 1,000 thrift files / 50 MB total source: p95 <5 s on reference hardware
 
 The manager must avoid unbounded memory growth across repeated open/change/close cycles and repeated rescans.
+
+Worker-pool policy:
+
+- `ParseWorkers=0` means automatic sizing
+- automatic sizing must stay bounded; implementations must not spawn one parser per file
+- each workspace parse worker owns one reusable parser instance rather than creating a fresh parser for every file
+- worker-count tuning is a performance control only; it must not change query or diagnostic semantics
 
 ## Security and Resource Constraints
 

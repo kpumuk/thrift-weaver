@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
+	parserbackend "github.com/kpumuk/thrift-weaver/internal/syntax/backend"
 	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
 	"github.com/kpumuk/thrift-weaver/internal/text"
 )
@@ -34,7 +35,7 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 		completeBackendAttemptFailure(attempt, err)
 		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("init parser: %w", err)), nil
 	}
-	rawTree, err := parser.Parse(ctx, src, nil)
+	out, rawTree, err := parseFullTreeWithParser(ctx, parser, src, opts, lexRes)
 	if err != nil {
 		parser.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -43,12 +44,6 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 		}
 		completeBackendAttemptFailure(attempt, err)
 		return buildDegradedTreeForParserFailureWithLexResult(src, opts, lexRes, fmt.Errorf("parse source: %w", err)), nil
-	}
-	out, err := buildSyntaxTreeFromRawWithLexResult(ctx, src, opts, rawTree, lexRes)
-	if err != nil {
-		rawTree.Close()
-		parser.Close()
-		return nil, err
 	}
 	completeBackendAttemptSuccess(attempt)
 	adoptRuntimeTree(out, &parseRuntimeState{
@@ -63,6 +58,19 @@ func Parse(ctx context.Context, src []byte, opts ParseOptions) (*Tree, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func parseFullTreeWithParser(ctx context.Context, parser parserbackend.Parser, src []byte, opts ParseOptions, lexRes lexer.Result) (*Tree, *ts.Tree, error) {
+	rawTree, err := parser.Parse(ctx, src, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := buildSyntaxTreeFromRawWithLexResult(ctx, src, opts, rawTree, lexRes)
+	if err != nil {
+		rawTree.Close()
+		return nil, nil, err
+	}
+	return out, rawTree, nil
 }
 
 // Reparse reparses from scratch when no incremental edit set is available.

@@ -239,6 +239,7 @@ Changed-range lint:
 - `thriftls` uses a single embedded wasm parser backend
 - there is no supported backend toggle
 - no user-configurable lint rule toggles or parser timeout knobs are exposed yet
+- workspace indexing uses a bounded parse-worker pool; `--workspace-index-workers` or `thrift.workspace.indexWorkers` controls it, and `0` uses the server default
 - rename is intentionally fail-closed, currently targets top-level declarations only, and refuses to run until workspace discovery is complete enough to be exact
 - parser cancellation/time limits currently follow the request context; there is no separate configurable hard timeout inside the server
 
@@ -286,6 +287,7 @@ Useful settings:
 
 - `thrift.server.path`: path to `thriftls`
 - `thrift.server.args`: extra args for `thriftls`
+- `thrift.workspace.indexWorkers`: maximum parallel workers used for workspace indexing (`0` = server default)
 - `thrift.format.lineWidth`: preferred formatter width (forwarded by extension; server support may evolve)
 - `thrift.trace.server`: LSP trace (`off`, `messages`, `verbose`)
 - `thrift.managedInstall.enabled`: enable/disable managed `thriftls` install
