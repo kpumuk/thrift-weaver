@@ -303,6 +303,82 @@ func TestManagerPrepareRenameAndRename(t *testing.T) {
 	}
 }
 
+func TestManagerRenameRequiresDiscoveryComplete(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "rename")
+	m := NewManager(Options{WorkspaceRoots: []string{root}})
+	defer m.Close()
+	m.setRescanIntervalForTesting(5 * time.Minute)
+
+	mainPath := filepath.Join(root, "main.thrift")
+	mainSource := testutil.ReadFile(t, mainPath)
+	if err := m.UpsertOpenDocumentWithReason(context.Background(), DocumentInput{
+		URI:        mainPath,
+		Version:    1,
+		Generation: 1,
+		Source:     mainSource,
+	}, RebuildReasonOpen); err != nil {
+		t.Fatalf("UpsertOpenDocumentWithReason: %v", err)
+	}
+	if err := m.RefreshOpenDocumentClosureWithReason(context.Background(), RebuildReasonOpen); err != nil {
+		t.Fatalf("RefreshOpenDocumentClosureWithReason: %v", err)
+	}
+
+	doc := mustDocument(t, mustSnapshot(t, m), mainPath)
+	pos := mustUTF16PositionForSubstring(t, mainSource, "shared.User user")
+
+	prep, meta, err := m.PrepareRename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, pos)
+	if err != nil {
+		t.Fatalf("PrepareRename: %v", err)
+	}
+	if meta.DiscoveryComplete {
+		t.Fatal("prepareRename should report incomplete discovery before workspace rescan")
+	}
+	if prep.Placeholder != "User" {
+		t.Fatalf("PrepareRename placeholder=%q, want %q", prep.Placeholder, "User")
+	}
+
+	result, meta, err := m.Rename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, pos, "Person")
+	if !errors.Is(err, ErrWorkspaceIncomplete) {
+		t.Fatalf("Rename error=%v, want %v", err, ErrWorkspaceIncomplete)
+	}
+	if meta.DiscoveryComplete {
+		t.Fatal("rename should report incomplete discovery before workspace rescan")
+	}
+	if result == nil || result.Placeholder != "User" {
+		t.Fatalf("Rename result=%+v, want placeholder User", result)
+	}
+
+	if err := m.RescanWorkspaceWithReason(context.Background(), RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	doc = mustDocument(t, mustSnapshot(t, m), mainPath)
+	result, meta, err = m.Rename(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, pos, "Person")
+	if err != nil {
+		t.Fatalf("Rename after rescan: %v", err)
+	}
+	if !meta.DiscoveryComplete {
+		t.Fatal("rename should report complete discovery after workspace rescan")
+	}
+	if len(result.Documents) != 2 {
+		t.Fatalf("Rename documents=%d, want 2", len(result.Documents))
+	}
+}
+
 func TestManagerRenameBlocksInvalidName(t *testing.T) {
 	t.Parallel()
 

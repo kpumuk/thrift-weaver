@@ -151,6 +151,9 @@ func (m *Manager) Rename(ctx context.Context, doc QueryDocument, pos text.UTF16P
 		m.observeRenameBlockers(blockers)
 		return &RenameResult{Placeholder: placeholder, Blockers: blockers}, qctx.meta, ErrRenameBlocked
 	}
+	if !qctx.meta.DiscoveryComplete {
+		return &RenameResult{Placeholder: placeholder}, qctx.meta, ErrWorkspaceIncomplete
+	}
 
 	if blocker := validateRenameIdentifier(target.symbol, newName); blocker != nil {
 		m.observeRenameBlockers([]IndexDiagnostic{*blocker})
