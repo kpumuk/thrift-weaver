@@ -189,10 +189,20 @@ When cross-file analysis is enabled, `thriftlint` also checks:
 - `didChange`: syntax diagnostics are published immediately; lint is debounced and runs on the full file
 - `didSave`: full-file lint runs immediately
 - `didClose`: diagnostics are cleared
-- workspace folders build a shared index for cross-file diagnostics and navigation
+- workspace folders bound a shared lazy workspace index for cross-file diagnostics and navigation; `initialize` and the first `didOpen` do not wait for a whole-root crawl
 - if the client provides no workspace folders, `thriftls` uses the directory of the first opened document as an implicit workspace root
+- `didOpen`, `didChange`, `didSave`, and `didClose` refresh the active document plus its transitive include closure first, then schedule background workspace discovery
 - open unsaved documents shadow on-disk files for diagnostics, definition, references, and rename
-- `workspace/didChangeWatchedFiles` and `workspace/didChangeWorkspaceFolders` refresh the index and republish affected workspace diagnostics
+- opportunistic background discovery respects recursive `.gitignore` files and still hard-skips `.git`, `.hg`, `.svn`, `.idea`, and `.vscode`
+- `.gitignore` never hides an open document or an explicitly resolved include target
+- `workspace/didChangeWatchedFiles` and `workspace/didChangeWorkspaceFolders` refresh loaded documents immediately, schedule further background discovery, and republish affected workspace diagnostics
+
+Navigation and refactor behavior under lazy discovery:
+
+- go to definition works as soon as the queried binding is exact inside the currently loaded graph
+- find references fails closed with `workspace discovery incomplete` until background discovery has exact reverse-dependency coverage for the queried symbol
+- rename is also fail-closed on incomplete coverage; `prepareRename` may succeed before rename is allowed
+- workspace symbol search is best-effort over the currently loaded graph and widens as background discovery progresses
 
 Current debounce:
 
@@ -229,7 +239,7 @@ Changed-range lint:
 - `thriftls` uses a single embedded wasm parser backend
 - there is no supported backend toggle
 - no user-configurable lint rule toggles or parser timeout knobs are exposed yet
-- rename is intentionally fail-closed and currently targets top-level declarations only
+- rename is intentionally fail-closed, currently targets top-level declarations only, and refuses to run until workspace discovery is complete enough to be exact
 - parser cancellation/time limits currently follow the request context; there is no separate configurable hard timeout inside the server
 
 For backend troubleshooting and breaker behavior, see [WASM Runtime and Troubleshooting](/Users/dmytro/work/github/thrift-weaver/docs/wasm-runtime.md).

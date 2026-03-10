@@ -191,10 +191,14 @@ sequenceDiagram
 Cross-file features share one workspace index instead of re-binding independently in the CLI and LSP:
 
 - `SnapshotStore` owns the latest open-document bytes, parse tree, version, and per-document generation.
-- `internal/index.Manager` owns immutable `WorkspaceSnapshot` values built from on-disk scans plus open-document shadows.
+- `internal/index.Manager` owns immutable `WorkspaceSnapshot` values built from open-document shadows, direct include-closure loads, and opportunistic background discovery under the configured roots.
+- `thriftls` installs the manager immediately, refreshes the open document plus its transitive include closure synchronously, and leaves wider workspace discovery to a background loop.
+- workspace roots bound discovery scope; they do not imply a synchronous whole-root scan at `initialize` time.
+- opportunistic discovery respects recursive `.gitignore` files plus fixed VCS/editor directory skips, while direct loads for open documents and explicit include targets bypass `.gitignore` for correctness.
 - `thriftls` captures the active document snapshot and matching workspace generation before serving definition, references, workspace symbol, prepare-rename, and rename requests.
+- definition can answer from the currently loaded graph as soon as binding is exact; references and rename fail closed until discovery is complete enough to be exact; workspace symbol remains best-effort over the loaded graph.
 - parser diagnostics, local lint diagnostics, and workspace-lint diagnostics are published as independent buckets so stale workspace work cannot clear newer parse results.
-- workspace folder changes, watched file changes, and periodic rescans refresh the workspace index without exposing half-built state to readers.
+- workspace folder changes, watched file changes, and periodic rescans widen or refresh the workspace index without exposing half-built state to readers.
 
 ## Key Design Invariants
 
@@ -208,6 +212,9 @@ Cross-file features share one workspace index instead of re-binding independentl
 - Workspace identity is shared:
   - `SnapshotStore`, `internal/index`, and LSP handlers all use the same canonical URI and `DocumentKey` derivation
   - open unsaved documents shadow on-disk content for diagnostics, navigation, and rename
+- Lazy discovery is explicit:
+  - open-document include closures publish first so active-file diagnostics and go-to-definition stay responsive in large monorepos
+  - background discovery widens coverage later for exact reverse-dependency queries such as references and rename
 - Comment fidelity is lexer-owned:
   - comments/trivia are preserved in lexer output
   - formatter emits comments from trivia rather than reconstructing them from syntax nodes
