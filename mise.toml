@@ -28,8 +28,8 @@ description = "Run race detector for LSP/document-store packages"
 run = "CGO_ENABLED=1 go test -race ./internal/lsp ./cmd/thriftls"
 
 [tasks.vscode-install]
-description = "Install VS Code extension dev dependencies (lockfile)"
-run = "npm --prefix editors/vscode ci"
+description = "Install VS Code extension dev dependencies (lockfile, omit optional native deps)"
+run = "npm --prefix editors/vscode ci --omit=optional"
 
 [tasks.vscode-compile]
 description = "Compile VS Code extension TypeScript"
