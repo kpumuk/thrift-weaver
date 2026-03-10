@@ -50,6 +50,11 @@ Notes:
 - Add tests with functional changes whenever practical.
 - If the RFC is underspecified for your task, stop and patch the RFC before continuing.
 
+## Commit Messages
+
+- Use plain-English commit messages that match the existing repository style, for example `Add workspace indexing RFC`.
+- Do not use conventional-commit prefixes or scoped prefixes such as `docs:`, `lsp:`, `index:`, or similar forms.
+
 ## Repository Layout (Early-Stage)
 
 - `docs/rfcs/` - accepted/design RFCs (source of truth for architecture/policy)
