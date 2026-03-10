@@ -21,6 +21,7 @@ func main() {
 
 type config struct {
 	workspaceIndexWorkers int
+	stdio                 bool
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
@@ -42,6 +43,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 		"workspace-index-workers",
 		0,
 		"number of parallel workspace index parse workers (0 = auto)",
+	)
+	fs.BoolVar(
+		&cfg.stdio,
+		"stdio",
+		false,
+		"serve LSP over stdio (accepted for client compatibility; stdio is always used)",
 	)
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
