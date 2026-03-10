@@ -311,11 +311,8 @@ func (m *Manager) RefreshOpenDocumentClosureWithReason(ctx context.Context, reas
 	}
 
 	m.mu.Lock()
-	openDocs, discoveryComplete := m.openDocumentSeedsLocked()
+	openDocs, wasDiscoveryComplete := m.openDocumentSeedsLocked()
 	m.mu.Unlock()
-	if discoveryComplete {
-		return nil
-	}
 
 	loaded, err := m.loadOpenDocumentClosure(ctx, cfg, openDocs)
 	if err != nil {
@@ -324,15 +321,11 @@ func (m *Manager) RefreshOpenDocumentClosureWithReason(ctx context.Context, reas
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.discoveryCompleteLocked() {
-		return nil
-	}
-
 	changed, fullRebuild := m.replaceDiskStatesLocked(loaded, diskSourceDirect)
-	if len(changed) == 0 && m.snapshot.Load() != nil {
+	if len(changed) == 0 && m.snapshot.Load() != nil && wasDiscoveryComplete == m.discoveryCompleteLocked() {
 		return nil
 	}
-	m.publishLocked(changed, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), len(loaded), false)
+	m.publishLocked(changed, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), len(loaded), m.discoveryCompleteLocked())
 	return nil
 }
 

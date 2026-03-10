@@ -332,7 +332,7 @@ func TestServerRunPublishesDebouncedLintDiagnosticsAfterDidChange(t *testing.T) 
 		}),
 	})
 
-	time.Sleep(60 * time.Millisecond)
+	waitForWorkspaceLintPropagation()
 	stopServerAsync(t, pw, errCh)
 
 	notifications := collectPublishDiagnosticsMessages(t, readAllFrames(t, out.Bytes()))
@@ -535,40 +535,42 @@ func TestServerRunPublishesWorkspaceDiagnosticsAndClearsOnFix(t *testing.T) {
 	mainText := string(testutil.ReadFile(t, mainPath))
 
 	s := NewServer()
-	s.setLintDebounceForTesting(10 * time.Millisecond)
-	pw, out, errCh := runServerAsync(t, s)
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
 
-	writeReqFrame(t, pw, Request{
-		JSONRPC: JSONRPCVersion,
-		ID:      json.RawMessage(`1`),
-		Method:  "initialize",
-		Params: mustJSON(t, InitializeParams{
-			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
-		}),
-	})
-	writeReqFrame(t, pw, Request{
-		JSONRPC: JSONRPCVersion,
-		Method:  "textDocument/didOpen",
-		Params: mustJSON(t, DidOpenParams{
-			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
-		}),
-	})
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	waitForWorkspaceLintPropagation()
+	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
+		t.Fatalf("publishDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(open): %v", err)
+	}
 
-	time.Sleep(60 * time.Millisecond)
-
-	writeReqFrame(t, pw, Request{
-		JSONRPC: JSONRPCVersion,
-		Method:  "textDocument/didChange",
-		Params: mustJSON(t, DidChangeParams{
-			TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 2},
-			ContentChanges: []TextDocumentContentChangeEvent{{
-				Text: "struct Holder {\n  1: string name,\n}\n",
-			}},
-		}),
-	})
-
-	time.Sleep(80 * time.Millisecond)
-	stopServerAsync(t, pw, errCh)
+	if err := s.DidChange(context.Background(), DidChangeParams{
+		TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 2},
+		ContentChanges: []TextDocumentContentChangeEvent{{
+			Text: "struct Holder {\n  1: string name,\n}\n",
+		}},
+	}); err != nil {
+		t.Fatalf("DidChange: %v", err)
+	}
+	if err := s.publishSyntaxDiagnosticsForURI(mainURI); err != nil {
+		t.Fatalf("publishSyntaxDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(change): %v", err)
+	}
 
 	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
 	if !diagnosticsContainCode(notifications, "LINT_INCLUDE_TARGET_UNKNOWN") {
@@ -623,7 +625,7 @@ func TestServerRunSuppressesStaleWorkspaceDiagnostics(t *testing.T) {
 		}),
 	})
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 
 	writeReqFrame(t, pw, Request{
 		JSONRPC: JSONRPCVersion,
@@ -636,7 +638,7 @@ func TestServerRunSuppressesStaleWorkspaceDiagnostics(t *testing.T) {
 		}),
 	})
 
-	time.Sleep(100 * time.Millisecond)
+	waitForWorkspaceLintPropagation()
 	stopServerAsync(t, pw, errCh)
 
 	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
@@ -682,7 +684,7 @@ func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T)
 		}),
 	})
 
-	time.Sleep(40 * time.Millisecond)
+	waitForWorkspaceLintPropagation()
 
 	writeReqFrame(t, pw, Request{
 		JSONRPC: JSONRPCVersion,
@@ -692,7 +694,7 @@ func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T)
 		}),
 	})
 
-	time.Sleep(60 * time.Millisecond)
+	waitForWorkspaceLintPropagation()
 
 	writeReqFrame(t, pw, Request{
 		JSONRPC: JSONRPCVersion,
@@ -700,7 +702,7 @@ func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T)
 		Params:  mustJSON(t, DidCloseParams{TextDocument: TextDocumentIdentifier{URI: sharedURI}}),
 	})
 
-	time.Sleep(80 * time.Millisecond)
+	waitForWorkspaceLintPropagation()
 	stopServerAsync(t, pw, errCh)
 
 	mainDiagnostics := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
@@ -1409,41 +1411,40 @@ func TestServerRunWatchedFileChangesRefreshWorkspaceDiagnostics(t *testing.T) {
 	mainText := string(testutil.ReadFile(t, mainPath))
 
 	s := NewServer()
-	s.setLintDebounceForTesting(10 * time.Millisecond)
-	pw, out, errCh := runServerAsync(t, s)
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
 
-	writeReqFrame(t, pw, Request{
-		JSONRPC: JSONRPCVersion,
-		ID:      json.RawMessage(`120`),
-		Method:  "initialize",
-		Params: mustJSON(t, InitializeParams{
-			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
-		}),
-	})
-	writeReqFrame(t, pw, Request{
-		JSONRPC: JSONRPCVersion,
-		Method:  "textDocument/didOpen",
-		Params: mustJSON(t, DidOpenParams{
-			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
-		}),
-	})
-
-	time.Sleep(60 * time.Millisecond)
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	waitForWorkspaceLintPropagation()
+	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
+		t.Fatalf("publishDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(open): %v", err)
+	}
 
 	missingPath := filepath.Join(root, "missing.thrift")
 	if err := os.WriteFile(missingPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(%s): %v", missingPath, err)
 	}
-	writeReqFrame(t, pw, Request{
-		JSONRPC: JSONRPCVersion,
-		Method:  "workspace/didChangeWatchedFiles",
-		Params: mustJSON(t, DidChangeWatchedFilesParams{
-			Changes: []FileEvent{{URI: mustCanonicalURI(t, missingPath), Type: FileChangeTypeCreated}},
-		}),
-	})
-
-	time.Sleep(80 * time.Millisecond)
-	stopServerAsync(t, pw, errCh)
+	if err := s.DidChangeWatchedFiles(context.Background(), DidChangeWatchedFilesParams{
+		Changes: []FileEvent{{URI: mustCanonicalURI(t, missingPath), Type: FileChangeTypeCreated}},
+	}); err != nil {
+		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(watch): %v", err)
+	}
 
 	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
 	if !diagnosticsContainCode(notifications, "LINT_INCLUDE_TARGET_UNKNOWN") {
@@ -1452,6 +1453,63 @@ func TestServerRunWatchedFileChangesRefreshWorkspaceDiagnostics(t *testing.T) {
 	final := latestDiagnosticsForVersion(t, notifications, 1)
 	if len(final.Diagnostics) != 0 {
 		t.Fatalf("expected workspace diagnostics to clear after watched file create, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunWorkspaceDiagnosticsBypassGitIgnoreForExplicitIncludes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("vendor/\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o750); err != nil {
+		t.Fatalf("MkdirAll vendor: %v", err)
+	}
+
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "vendor", "shared.thrift")
+	mainText := "include \"vendor/shared.thrift\"\n\nstruct Holder {\n  1: shared.User user,\n}\n"
+	if err := os.WriteFile(mainPath, []byte(mainText), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", mainPath, err)
+	}
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
+
+	rootURI := mustCanonicalURI(t, root)
+	mainURI := mustCanonicalURI(t, mainPath)
+
+	s := NewServer()
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	waitForWorkspaceLintPropagation()
+	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
+		t.Fatalf("publishDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot: %v", err)
+	}
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if len(notifications) == 0 {
+		t.Fatal("expected diagnostics publication for opened document")
+	}
+	final := latestDiagnosticsForVersion(t, notifications, 1)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected explicit include target under .gitignore to stay diagnostic-free, got %+v", final.Diagnostics)
 	}
 }
 
@@ -1959,6 +2017,23 @@ func stopServerAsync(t *testing.T, pw *io.PipeWriter, errCh <-chan error) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+}
+
+func waitForWorkspaceLintPropagation() {
+	time.Sleep(150 * time.Millisecond)
+}
+
+func publishWorkspaceDiagnosticsForCurrentSnapshot(t *testing.T, s *Server, uri string) error {
+	t.Helper()
+
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if snap == nil {
+		t.Fatalf("missing open snapshot for %s", uri)
+	}
+	return s.publishWorkspaceLintDiagnostics(context.Background(), uri, snap.Version, snap.Generation)
 }
 
 func readRespFrame(t *testing.T, r *bufio.Reader) Response {
