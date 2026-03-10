@@ -45,6 +45,17 @@ type WorkspaceFolder struct {
 	Name string `json:"name,omitempty"`
 }
 
+// WorkspaceFoldersChangeEvent describes added and removed workspace folders.
+type WorkspaceFoldersChangeEvent struct {
+	Added   []WorkspaceFolder `json:"added"`
+	Removed []WorkspaceFolder `json:"removed"`
+}
+
+// DidChangeWorkspaceFoldersParams is the workspace/didChangeWorkspaceFolders payload.
+type DidChangeWorkspaceFoldersParams struct {
+	Event WorkspaceFoldersChangeEvent `json:"event"`
+}
+
 // InitializeResult is the LSP initialize response payload.
 type InitializeResult struct {
 	Capabilities ServerCapabilities `json:"capabilities"`
@@ -52,17 +63,29 @@ type InitializeResult struct {
 
 // ServerCapabilities declares supported LSP features.
 type ServerCapabilities struct {
-	TextDocumentSync                TextDocumentSyncOptions `json:"textDocumentSync"`
-	DefinitionProvider              bool                    `json:"definitionProvider,omitempty"`
-	ReferencesProvider              bool                    `json:"referencesProvider,omitempty"`
-	RenameProvider                  bool                    `json:"renameProvider,omitempty"`
-	DocumentFormattingProvider      bool                    `json:"documentFormattingProvider,omitempty"`
-	DocumentRangeFormattingProvider bool                    `json:"documentRangeFormattingProvider,omitempty"`
-	DocumentSymbolProvider          bool                    `json:"documentSymbolProvider,omitempty"`
-	FoldingRangeProvider            bool                    `json:"foldingRangeProvider,omitempty"`
-	SelectionRangeProvider          bool                    `json:"selectionRangeProvider,omitempty"`
-	WorkspaceSymbolProvider         bool                    `json:"workspaceSymbolProvider,omitempty"`
-	SemanticTokensProvider          *SemanticTokensOptions  `json:"semanticTokensProvider,omitempty"`
+	TextDocumentSync                TextDocumentSyncOptions      `json:"textDocumentSync"`
+	DefinitionProvider              bool                         `json:"definitionProvider,omitempty"`
+	ReferencesProvider              bool                         `json:"referencesProvider,omitempty"`
+	RenameProvider                  bool                         `json:"renameProvider,omitempty"`
+	DocumentFormattingProvider      bool                         `json:"documentFormattingProvider,omitempty"`
+	DocumentRangeFormattingProvider bool                         `json:"documentRangeFormattingProvider,omitempty"`
+	DocumentSymbolProvider          bool                         `json:"documentSymbolProvider,omitempty"`
+	FoldingRangeProvider            bool                         `json:"foldingRangeProvider,omitempty"`
+	SelectionRangeProvider          bool                         `json:"selectionRangeProvider,omitempty"`
+	WorkspaceSymbolProvider         bool                         `json:"workspaceSymbolProvider,omitempty"`
+	Workspace                       *WorkspaceServerCapabilities `json:"workspace,omitempty"`
+	SemanticTokensProvider          *SemanticTokensOptions       `json:"semanticTokensProvider,omitempty"`
+}
+
+// WorkspaceServerCapabilities declares supported workspace-scoped features.
+type WorkspaceServerCapabilities struct {
+	WorkspaceFolders *WorkspaceFoldersServerCapabilities `json:"workspaceFolders,omitempty"`
+}
+
+// WorkspaceFoldersServerCapabilities declares workspace folder change support.
+type WorkspaceFoldersServerCapabilities struct {
+	Supported           bool `json:"supported"`
+	ChangeNotifications bool `json:"changeNotifications,omitempty"`
 }
 
 // TextDocumentSyncOptions declares document sync behavior.
@@ -135,6 +158,26 @@ type DidCloseParams struct {
 type DidSaveParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 	Text         *string                `json:"text,omitempty"`
+}
+
+// FileEvent is a workspace/didChangeWatchedFiles change entry.
+type FileEvent struct {
+	URI  string `json:"uri"`
+	Type int    `json:"type"`
+}
+
+const (
+	// FileChangeTypeCreated indicates a created file.
+	FileChangeTypeCreated = 1
+	// FileChangeTypeChanged indicates a modified file.
+	FileChangeTypeChanged = 2
+	// FileChangeTypeDeleted indicates a deleted file.
+	FileChangeTypeDeleted = 3
+)
+
+// DidChangeWatchedFilesParams is the workspace/didChangeWatchedFiles payload.
+type DidChangeWatchedFilesParams struct {
+	Changes []FileEvent `json:"changes"`
 }
 
 // SaveOptions controls textDocument/didSave payload behavior.

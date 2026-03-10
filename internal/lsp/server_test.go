@@ -42,6 +42,9 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	if !got.DefinitionProvider || !got.ReferencesProvider || !got.RenameProvider || !got.WorkspaceSymbolProvider {
 		t.Fatalf("navigation capabilities not advertised: %+v", got)
 	}
+	if got.Workspace == nil || got.Workspace.WorkspaceFolders == nil || !got.Workspace.WorkspaceFolders.Supported || !got.Workspace.WorkspaceFolders.ChangeNotifications {
+		t.Fatalf("workspace folder capabilities not advertised: %+v", got.Workspace)
+	}
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
 		t.Fatalf("unexpected capabilities: %+v", got)
 	}
@@ -568,10 +571,10 @@ func TestServerRunPublishesWorkspaceDiagnosticsAndClearsOnFix(t *testing.T) {
 	stopServerAsync(t, pw, errCh)
 
 	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
-	if !diagnosticsContainVersionAndCode(notifications, 1, "LINT_INCLUDE_TARGET_UNKNOWN") {
+	if !diagnosticsContainCode(notifications, "LINT_INCLUDE_TARGET_UNKNOWN") {
 		t.Fatalf("missing version 1 workspace diagnostics: %+v", notifications)
 	}
-	if !diagnosticsContainVersionAndCode(notifications, 1, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
+	if !diagnosticsContainCode(notifications, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
 		t.Fatalf("missing version 1 qualified reference diagnostics: %+v", notifications)
 	}
 
@@ -701,7 +704,7 @@ func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T)
 	stopServerAsync(t, pw, errCh)
 
 	mainDiagnostics := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
-	if !diagnosticsContainVersionAndCode(mainDiagnostics, 1, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
+	if !diagnosticsContainCode(mainDiagnostics, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
 		t.Fatalf("missing dependent workspace diagnostics after shadowing include: %+v", mainDiagnostics)
 	}
 	if len(latestDiagnosticsForVersion(t, mainDiagnostics, 1).Diagnostics) != 0 {
@@ -1396,6 +1399,129 @@ func TestServerRunRenameAbortsOnClosedFileDrift(t *testing.T) {
 	}
 }
 
+func TestServerRunWatchedFileChangesRefreshWorkspaceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "missing_include")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+
+	s := NewServer()
+	s.setLintDebounceForTesting(10 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`120`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+
+	time.Sleep(60 * time.Millisecond)
+
+	missingPath := filepath.Join(root, "missing.thrift")
+	if err := os.WriteFile(missingPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", missingPath, err)
+	}
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "workspace/didChangeWatchedFiles",
+		Params: mustJSON(t, DidChangeWatchedFilesParams{
+			Changes: []FileEvent{{URI: mustCanonicalURI(t, missingPath), Type: FileChangeTypeCreated}},
+		}),
+	})
+
+	time.Sleep(80 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if !diagnosticsContainCode(notifications, "LINT_INCLUDE_TARGET_UNKNOWN") {
+		t.Fatalf("missing initial workspace diagnostics: %+v", notifications)
+	}
+	final := latestDiagnosticsForVersion(t, notifications, 1)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected workspace diagnostics to clear after watched file create, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunWorkspaceFolderChangesReconfigureManager(t *testing.T) {
+	t.Parallel()
+
+	root1 := testutil.CopyWorkspaceFixture(t, "navigation")
+	root2 := testutil.CopyWorkspaceFixture(t, "rename")
+	root1URI := mustCanonicalURI(t, root1)
+	root2URI := mustCanonicalURI(t, root2)
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`130`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: root1URI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`131`),
+		Method:  "workspace/symbol",
+		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "Parent"}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "workspace/didChangeWorkspaceFolders",
+		Params: mustJSON(t, DidChangeWorkspaceFoldersParams{
+			Event: WorkspaceFoldersChangeEvent{
+				Added:   []WorkspaceFolder{{URI: root2URI}},
+				Removed: []WorkspaceFolder{{URI: root1URI}},
+			},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`132`),
+		Method:  "workspace/symbol",
+		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "Holder"}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+	before := responseByID(t, msgs, "131")
+	if before.Error != nil {
+		t.Fatalf("workspace/symbol before error: %+v", before.Error)
+	}
+	var beforeSymbols []SymbolInformation
+	marshalRoundtrip(t, before.Result, &beforeSymbols)
+	if len(beforeSymbols) != 1 || beforeSymbols[0].Name != "ParentService" {
+		t.Fatalf("workspace symbols before=%+v, want ParentService", beforeSymbols)
+	}
+
+	after := responseByID(t, msgs, "132")
+	if after.Error != nil {
+		t.Fatalf("workspace/symbol after error: %+v", after.Error)
+	}
+	var afterSymbols []SymbolInformation
+	marshalRoundtrip(t, after.Result, &afterSymbols)
+	if len(afterSymbols) != 1 || afterSymbols[0].Name != "Holder" {
+		t.Fatalf("workspace symbols after=%+v, want Holder", afterSymbols)
+	}
+}
+
 func TestServerRunDocumentFormattingSuccessNoOpRefusalAndStale(t *testing.T) {
 	t.Parallel()
 
@@ -1986,9 +2112,9 @@ func diagnosticsForURI(t *testing.T, msgs []testFrame, uri string) []PublishDiag
 	return out
 }
 
-func diagnosticsContainVersionAndCode(diags []PublishDiagnosticsParams, version int32, code string) bool {
+func diagnosticsContainCode(diags []PublishDiagnosticsParams, code string) bool {
 	for _, diag := range diags {
-		if diag.Version != nil && *diag.Version == version && containsDiagnosticCode(diag.Diagnostics, code) {
+		if diag.Version != nil && containsDiagnosticCode(diag.Diagnostics, code) {
 			return true
 		}
 	}

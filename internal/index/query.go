@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
@@ -26,7 +27,10 @@ type renameTarget struct {
 }
 
 // Definition resolves the declaration location for the symbol or reference under pos.
-func (m *Manager) Definition(ctx context.Context, doc QueryDocument, pos text.UTF16Position) ([]Location, QueryMeta, error) {
+func (m *Manager) Definition(ctx context.Context, doc QueryDocument, pos text.UTF16Position) (locations []Location, meta QueryMeta, err error) {
+	start := time.Now()
+	defer func() { m.observeQuery("definition", start, meta) }()
+
 	qctx, symbol, err := m.queryTargetSymbol(ctx, doc, pos)
 	if err != nil {
 		return nil, qctx.meta, err
@@ -38,7 +42,10 @@ func (m *Manager) Definition(ctx context.Context, doc QueryDocument, pos text.UT
 }
 
 // References resolves all indexed reference sites for the symbol under pos.
-func (m *Manager) References(ctx context.Context, doc QueryDocument, pos text.UTF16Position, includeDecl bool) ([]Location, QueryMeta, error) {
+func (m *Manager) References(ctx context.Context, doc QueryDocument, pos text.UTF16Position, includeDecl bool) (locations []Location, meta QueryMeta, err error) {
+	start := time.Now()
+	defer func() { m.observeQuery("references", start, meta) }()
+
 	qctx, symbol, err := m.queryTargetSymbol(ctx, doc, pos)
 	if err != nil {
 		return nil, qctx.meta, err
@@ -64,7 +71,10 @@ func (m *Manager) References(ctx context.Context, doc QueryDocument, pos text.UT
 }
 
 // WorkspaceSymbols searches indexed top-level symbols by name.
-func (m *Manager) WorkspaceSymbols(ctx context.Context, query string) ([]WorkspaceSymbol, QueryMeta, error) {
+func (m *Manager) WorkspaceSymbols(ctx context.Context, query string) (symbols []WorkspaceSymbol, meta QueryMeta, err error) {
+	start := time.Now()
+	defer func() { m.observeQuery("workspace/symbol", start, meta) }()
+
 	if err := contextOrBackground(ctx).Err(); err != nil {
 		return nil, QueryMeta{}, err
 	}
@@ -73,7 +83,7 @@ func (m *Manager) WorkspaceSymbols(ctx context.Context, query string) ([]Workspa
 	if !ok || snapshot == nil {
 		return nil, QueryMeta{}, ErrWorkspaceClosed
 	}
-	meta := QueryMeta{WorkspaceGeneration: snapshot.Generation}
+	meta = QueryMeta{WorkspaceGeneration: snapshot.Generation}
 	query = strings.TrimSpace(strings.ToLower(query))
 
 	out := make([]WorkspaceSymbol, 0, len(snapshot.SymbolsByID))
@@ -100,12 +110,16 @@ func (m *Manager) WorkspaceSymbols(ctx context.Context, query string) ([]Workspa
 }
 
 // PrepareRename validates that the position resolves to an exact rename target.
-func (m *Manager) PrepareRename(ctx context.Context, doc QueryDocument, pos text.UTF16Position) (*PrepareRenameResult, QueryMeta, error) {
+func (m *Manager) PrepareRename(ctx context.Context, doc QueryDocument, pos text.UTF16Position) (result *PrepareRenameResult, meta QueryMeta, err error) {
+	start := time.Now()
+	defer func() { m.observeQuery("prepareRename", start, meta) }()
+
 	qctx, target, blockers, err := m.queryRenameTarget(ctx, doc, pos)
 	if err != nil {
 		return nil, qctx.meta, err
 	}
 	if len(blockers) > 0 {
+		m.observeRenameBlockers(blockers)
 		return &PrepareRenameResult{Blockers: blockers}, qctx.meta, ErrRenameBlocked
 	}
 	return &PrepareRenameResult{
@@ -115,7 +129,10 @@ func (m *Manager) PrepareRename(ctx context.Context, doc QueryDocument, pos text
 }
 
 // Rename plans a fail-closed workspace rename for an indexed top-level declaration.
-func (m *Manager) Rename(ctx context.Context, doc QueryDocument, pos text.UTF16Position, newName string) (*RenameResult, QueryMeta, error) {
+func (m *Manager) Rename(ctx context.Context, doc QueryDocument, pos text.UTF16Position, newName string) (result *RenameResult, meta QueryMeta, err error) {
+	start := time.Now()
+	defer func() { m.observeQuery("rename", start, meta) }()
+
 	qctx, target, blockers, err := m.queryRenameTarget(ctx, doc, pos)
 	if err != nil {
 		return nil, qctx.meta, err
@@ -125,24 +142,30 @@ func (m *Manager) Rename(ctx context.Context, doc QueryDocument, pos text.UTF16P
 		placeholder = target.symbol.Name
 	}
 	if len(blockers) > 0 {
+		m.observeRenameBlockers(blockers)
 		return &RenameResult{Placeholder: placeholder, Blockers: blockers}, qctx.meta, ErrRenameBlocked
 	}
 
 	if blocker := validateRenameIdentifier(target.symbol, newName); blocker != nil {
+		m.observeRenameBlockers([]IndexDiagnostic{*blocker})
 		return &RenameResult{
 			Placeholder: placeholder,
 			Blockers:    []IndexDiagnostic{*blocker},
 		}, qctx.meta, ErrRenameBlocked
 	}
 
-	result, blockers, err := m.planRename(qctx, target.symbol, newName)
+	result, blockers, err = m.planRename(qctx, target.symbol, newName)
 	if err != nil {
+		if len(blockers) > 0 {
+			m.observeRenameBlockers(blockers)
+		}
 		if errors.Is(err, ErrContentModified) {
 			return &RenameResult{Placeholder: placeholder, Blockers: blockers}, qctx.meta, err
 		}
 		return nil, qctx.meta, err
 	}
 	if len(blockers) > 0 {
+		m.observeRenameBlockers(blockers)
 		return &RenameResult{
 			Placeholder: placeholder,
 			Blockers:    blockers,
@@ -632,4 +655,28 @@ func contextOrBackground(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+func (m *Manager) observeQuery(method string, start time.Time, meta QueryMeta) {
+	m.emit(Event{
+		Kind:                EventKindQuery,
+		Method:              method,
+		Duration:            time.Since(start),
+		WorkspaceGeneration: meta.WorkspaceGeneration,
+	})
+}
+
+func (m *Manager) observeRenameBlockers(blockers []IndexDiagnostic) {
+	if len(blockers) == 0 {
+		return
+	}
+
+	counts := make(map[string]int, len(blockers))
+	for _, blocker := range blockers {
+		counts[blocker.Code]++
+	}
+	m.emit(Event{
+		Kind:           EventKindRenameBlockers,
+		RenameBlockers: counts,
+	})
 }

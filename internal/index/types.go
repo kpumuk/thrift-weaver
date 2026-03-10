@@ -73,6 +73,7 @@ type Options struct {
 	IncludeDirs    []string
 	MaxFiles       int
 	MaxFileBytes   int64
+	Hooks          Hooks
 }
 
 // DocumentInput is a parsed-document input used by the workspace manager.

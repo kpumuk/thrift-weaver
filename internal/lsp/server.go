@@ -45,6 +45,7 @@ type Server struct {
 
 	workspaceMu       sync.Mutex
 	workspace         *index.Manager
+	workspaceRoots    []string
 	workspaceLintMu   sync.Mutex
 	workspaceLintJobs map[string]lintJobState
 	workspaceLintWG   sync.WaitGroup
@@ -215,6 +216,24 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(jsonRPCInvalidParams, err.Error())
 		}
 		s.cancelRequest(p)
+		return nil
+	case "workspace/didChangeWorkspaceFolders":
+		var p DidChangeWorkspaceFoldersParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		if err := s.DidChangeWorkspaceFolders(ctx, p); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
+		return nil
+	case "workspace/didChangeWatchedFiles":
+		var p DidChangeWatchedFilesParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		if err := s.DidChangeWatchedFiles(ctx, p); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
 		return nil
 	case "textDocument/didOpen":
 		var p DidOpenParams
@@ -438,7 +457,7 @@ func (s *Server) DidOpen(ctx context.Context, p DidOpenParams) error {
 	if _, err := store.Open(ctx, uri, p.TextDocument.Version, []byte(p.TextDocument.Text)); err != nil {
 		return err
 	}
-	return s.syncWorkspaceDocument(ctx, uri)
+	return s.syncWorkspaceDocumentWithReason(ctx, uri, index.RebuildReasonOpen)
 }
 
 // DidChange applies text changes and stores the reparsed snapshot.
@@ -450,7 +469,7 @@ func (s *Server) DidChange(ctx context.Context, p DidChangeParams) error {
 	if _, err := store.Change(ctx, uri, p.TextDocument.Version, p.ContentChanges); err != nil {
 		return err
 	}
-	return s.syncWorkspaceDocument(ctx, uri)
+	return s.syncWorkspaceDocumentWithReason(ctx, uri, index.RebuildReasonChange)
 }
 
 // DidSave refreshes the workspace view after a save while preserving the open-document shadow.
@@ -459,10 +478,10 @@ func (s *Server) DidSave(ctx context.Context, p DidSaveParams) error {
 	if manager == nil {
 		return nil
 	}
-	if err := manager.RescanWorkspace(ctx); err != nil {
+	if err := manager.RescanWorkspaceWithReason(ctx, index.RebuildReasonChange); err != nil {
 		return err
 	}
-	return s.syncWorkspaceDocument(ctx, p.TextDocument.URI)
+	return s.syncWorkspaceDocumentWithReason(ctx, p.TextDocument.URI, index.RebuildReasonChange)
 }
 
 // DidClose removes the document snapshot if present.
@@ -474,10 +493,54 @@ func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
 	}
 	store.Close(uri)
 	if manager := s.workspaceManager(); manager != nil {
-		if err := manager.CloseOpenDocument(ctx, uri); err != nil {
+		if err := manager.CloseOpenDocumentWithReason(ctx, uri, index.RebuildReasonClose); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// DidChangeWorkspaceFolders updates the configured workspace roots.
+func (s *Server) DidChangeWorkspaceFolders(ctx context.Context, p DidChangeWorkspaceFoldersParams) error {
+	current := s.workspaceRootsSnapshot()
+	removed, err := workspaceRootsFromFolders(p.Event.Removed)
+	if err != nil {
+		return err
+	}
+	added, err := workspaceRootsFromFolders(p.Event.Added)
+	if err != nil {
+		return err
+	}
+	next := updatedWorkspaceRoots(current, removed, added)
+
+	if len(next) == 0 {
+		s.closeWorkspaceManager()
+		return nil
+	}
+	if err := s.configureWorkspaceManager(ctx, next); err != nil {
+		return err
+	}
+	s.scheduleWorkspaceLintPublishForAllOpenDocuments()
+	return nil
+}
+
+// DidChangeWatchedFiles refreshes the workspace index from filesystem watcher events.
+func (s *Server) DidChangeWatchedFiles(ctx context.Context, p DidChangeWatchedFilesParams) error {
+	manager := s.workspaceManager()
+	if manager == nil {
+		return nil
+	}
+
+	for _, change := range p.Changes {
+		deleted := change.Type == FileChangeTypeDeleted
+		if err := manager.RefreshDocumentWithReason(ctx, change.URI, deleted, index.RebuildReasonWatch); err != nil {
+			if err := manager.RescanWorkspaceWithReason(ctx, index.RebuildReasonWatch); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	s.scheduleWorkspaceLintPublishForAllOpenDocuments()
 	return nil
 }
 
@@ -569,7 +632,7 @@ func (s *Server) configureWorkspaceFolders(ctx context.Context, folders []Worksp
 
 func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) error {
 	manager := index.NewManager(index.Options{WorkspaceRoots: roots})
-	if err := manager.RescanWorkspace(ctx); err != nil {
+	if err := manager.RescanWorkspaceWithReason(ctx, index.RebuildReasonManualRescan); err != nil {
 		manager.Close()
 		return err
 	}
@@ -580,12 +643,12 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 		return err
 	}
 	for _, snap := range store.Snapshots() {
-		if err := manager.UpsertOpenDocument(ctx, index.DocumentInput{
+		if err := manager.UpsertOpenDocumentWithReason(ctx, index.DocumentInput{
 			URI:        snap.URI,
 			Version:    snap.Version,
 			Generation: snap.Generation,
 			Source:     snap.Bytes(),
-		}); err != nil {
+		}, index.RebuildReasonOpen); err != nil {
 			manager.Close()
 			return err
 		}
@@ -594,6 +657,7 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 	s.workspaceMu.Lock()
 	old := s.workspace
 	s.workspace = manager
+	s.workspaceRoots = slices.Clone(roots)
 	s.workspaceMu.Unlock()
 	if old != nil {
 		old.Close()
@@ -617,10 +681,48 @@ func (s *Server) closeWorkspaceManager() {
 	s.workspaceMu.Lock()
 	manager := s.workspace
 	s.workspace = nil
+	s.workspaceRoots = nil
 	s.workspaceMu.Unlock()
 	if manager != nil {
 		manager.Close()
 	}
+}
+
+func (s *Server) workspaceRootsSnapshot() []string {
+	if s == nil {
+		return nil
+	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	return slices.Clone(s.workspaceRoots)
+}
+
+func updatedWorkspaceRoots(current, removed, added []string) []string {
+	next := make([]string, 0, len(current)+len(added))
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, root := range removed {
+		removedSet[root] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(current)+len(added))
+	appendUnique := func(root string) {
+		if _, ok := seen[root]; ok {
+			return
+		}
+		seen[root] = struct{}{}
+		next = append(next, root)
+	}
+
+	for _, root := range current {
+		if _, ok := removedSet[root]; ok {
+			continue
+		}
+		appendUnique(root)
+	}
+	for _, root := range added {
+		appendUnique(root)
+	}
+	return next
 }
 
 func (s *Server) ensureWorkspaceManagerForURI(ctx context.Context, uri string) (*index.Manager, error) {
@@ -641,7 +743,7 @@ func (s *Server) ensureWorkspaceManagerForURI(ctx context.Context, uri string) (
 	return s.workspaceManager(), nil
 }
 
-func (s *Server) syncWorkspaceDocument(ctx context.Context, uri string) error {
+func (s *Server) syncWorkspaceDocumentWithReason(ctx context.Context, uri string, reason index.RebuildReason) error {
 	manager, err := s.ensureWorkspaceManagerForURI(ctx, uri)
 	if err != nil || manager == nil {
 		return err
@@ -654,12 +756,12 @@ func (s *Server) syncWorkspaceDocument(ctx context.Context, uri string) error {
 	if snap == nil {
 		return nil
 	}
-	return manager.UpsertOpenDocument(ctx, index.DocumentInput{
+	return manager.UpsertOpenDocumentWithReason(ctx, index.DocumentInput{
 		URI:        snap.URI,
 		Version:    snap.Version,
 		Generation: snap.Generation,
 		Source:     snap.Bytes(),
-	})
+	}, reason)
 }
 
 func (s *Server) latestSnapshot(uri string) (*Snapshot, error) {
@@ -1193,6 +1295,16 @@ func (s *Server) scheduleWorkspaceLintPublishForImpactedURI(uri string) {
 		if snap.URI == uri {
 			continue
 		}
+		s.scheduleWorkspaceLintPublishForURI(snap.URI)
+	}
+}
+
+func (s *Server) scheduleWorkspaceLintPublishForAllOpenDocuments() {
+	store, err := s.requireStore()
+	if err != nil {
+		return
+	}
+	for _, snap := range store.Snapshots() {
 		s.scheduleWorkspaceLintPublishForURI(snap.URI)
 	}
 }

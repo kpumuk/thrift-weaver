@@ -17,6 +17,12 @@ func DefaultServerCapabilities() ServerCapabilities {
 		FoldingRangeProvider:            true,
 		SelectionRangeProvider:          true,
 		WorkspaceSymbolProvider:         true,
+		Workspace: &WorkspaceServerCapabilities{
+			WorkspaceFolders: &WorkspaceFoldersServerCapabilities{
+				Supported:           true,
+				ChangeNotifications: true,
+			},
+		},
 		SemanticTokensProvider: &SemanticTokensOptions{
 			Legend: SemanticTokensLegend{
 				TokenTypes:     semanticTokenLegendTypes(),
