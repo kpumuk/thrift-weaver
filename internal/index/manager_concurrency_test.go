@@ -17,7 +17,6 @@ func TestManagerConcurrentLazyDiscoveryOperations(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "rename")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(time.Hour)
 
 	mainPath := filepath.Join(root, "main.thrift")
 	sharedPath := filepath.Join(root, "shared.thrift")

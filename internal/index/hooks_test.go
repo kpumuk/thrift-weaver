@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/kpumuk/thrift-weaver/internal/testutil"
 )
@@ -32,7 +31,6 @@ func TestManagerHooksEmitRebuildQueryAndRenameBlockers(t *testing.T) {
 		},
 	})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspaceWithReason(context.Background(), RebuildReasonManualRescan); err != nil {
 		t.Fatalf("RescanWorkspaceWithReason: %v", err)
@@ -117,7 +115,6 @@ func TestManagerHooksReportLazyDiscoveryState(t *testing.T) {
 		},
 	})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.UpsertOpenDocumentWithReason(context.Background(), DocumentInput{
 		URI:        mainPath,

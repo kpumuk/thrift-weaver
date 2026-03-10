@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	"github.com/kpumuk/thrift-weaver/internal/testutil"
@@ -42,7 +41,6 @@ func BenchmarkManagerIncrementalWorkspaceRebuild(b *testing.B) {
 	root := testutil.CopyWorkspaceFixture(b, "shadowing")
 	manager := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer manager.Close()
-	manager.setRescanIntervalForTesting(time.Hour)
 
 	if err := manager.RescanWorkspace(context.Background()); err != nil {
 		b.Fatalf("RescanWorkspace: %v", err)
@@ -170,7 +168,6 @@ func benchmarkLazyDiscoveryWorkspace(b testing.TB) (root string, mainPath string
 func benchmarkLazyDiscoveryManager(tb testing.TB, root string, mainPath string, mainSource []byte) *Manager {
 	tb.Helper()
 	manager := NewManager(Options{WorkspaceRoots: []string{root}})
-	manager.setRescanIntervalForTesting(time.Hour)
 	if err := manager.UpsertOpenDocumentWithReason(context.Background(), DocumentInput{
 		URI:        mainPath,
 		Version:    1,
@@ -192,7 +189,6 @@ func benchmarkQuerySetup(b testing.TB, fixture, relPath, needle string) (*Manage
 	root := testutil.CopyWorkspaceFixture(b, fixture)
 	manager := NewManager(Options{WorkspaceRoots: []string{root}})
 	b.Cleanup(manager.Close)
-	manager.setRescanIntervalForTesting(time.Hour)
 	if err := manager.RescanWorkspace(context.Background()); err != nil {
 		b.Fatalf("RescanWorkspace: %v", err)
 	}

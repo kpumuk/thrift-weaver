@@ -156,7 +156,7 @@ func NewManager(opts Options) *Manager {
 	}
 	parseWorkers := normalizeParseWorkers(opts.ParseWorkers)
 
-	m := &Manager{
+	return &Manager{
 		roots:        roots,
 		includeDirs:  includeDirs,
 		maxFiles:     maxFiles,
@@ -166,7 +166,6 @@ func NewManager(opts Options) *Manager {
 		queueDepth:   opts.Hooks.QueueDepth,
 		slots:        make(map[DocumentKey]*documentSlot),
 	}
-	return m
 }
 
 func normalizeParseWorkers(workers int) int {
@@ -177,9 +176,7 @@ func normalizeParseWorkers(workers int) int {
 }
 
 // Close releases manager resources.
-func (m *Manager) Close() {
-	_ = m
-}
+func (m *Manager) Close() {}
 
 // UpsertOpenDocument reparses and stores the active open-document shadow.
 func (m *Manager) UpsertOpenDocument(ctx context.Context, in DocumentInput) error {
@@ -914,13 +911,6 @@ func normalizeIncludeDirs(in []string) []string {
 		out = append(out, raw)
 	}
 	return out
-}
-
-// setRescanIntervalForTesting is a no-op compatibility hook retained for tests
-// that previously disabled periodic rescans.
-func (m *Manager) setRescanIntervalForTesting(d time.Duration) {
-	_ = m
-	_ = d
 }
 
 func (m *Manager) pathAllowed(path string) bool {

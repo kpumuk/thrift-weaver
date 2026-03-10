@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kpumuk/thrift-weaver/internal/testutil"
 )
@@ -17,7 +16,6 @@ func TestManagerResolvesIncludesAndBindings(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "resolved_include")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(time.Hour)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -49,7 +47,6 @@ func TestManagerReportsMissingIncludeAndAliasConflicts(t *testing.T) {
 		root := testutil.CopyWorkspaceFixture(t, "missing_include")
 		m := NewManager(Options{WorkspaceRoots: []string{root}})
 		defer m.Close()
-		m.setRescanIntervalForTesting(time.Minute)
 
 		if err := m.RescanWorkspace(context.Background()); err != nil {
 			t.Fatalf("RescanWorkspace: %v", err)
@@ -72,7 +69,6 @@ func TestManagerReportsMissingIncludeAndAliasConflicts(t *testing.T) {
 		root := testutil.CopyWorkspaceFixture(t, "duplicate_alias")
 		m := NewManager(Options{WorkspaceRoots: []string{root}})
 		defer m.Close()
-		m.setRescanIntervalForTesting(2 * time.Minute)
 
 		if err := m.RescanWorkspace(context.Background()); err != nil {
 			t.Fatalf("RescanWorkspace: %v", err)
@@ -94,7 +90,6 @@ func TestManagerBuildsCycleComponentsDeterministically(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "cycle")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(3 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -122,7 +117,6 @@ func TestManagerShadowingInvalidatesReverseDependentsAndKeepsPublishedSnapshotsI
 	root := testutil.CopyWorkspaceFixture(t, "shadowing")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(4 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -173,7 +167,6 @@ func TestManagerRefreshOpenDocumentClosurePublishesEmptySnapshot(t *testing.T) {
 
 	m := NewManager(Options{WorkspaceRoots: []string{t.TempDir()}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(time.Hour)
 
 	if err := m.RefreshOpenDocumentClosureWithReason(context.Background(), RebuildReasonManualRescan); err != nil {
 		t.Fatalf("RefreshOpenDocumentClosureWithReason: %v", err)
@@ -212,7 +205,6 @@ func TestManagerRefreshOpenDocumentClosureBypassesGitIgnore(t *testing.T) {
 
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(time.Hour)
 
 	if err := m.UpsertOpenDocumentWithReason(context.Background(), DocumentInput{
 		URI:        mainPath,

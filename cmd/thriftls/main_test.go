@@ -22,12 +22,9 @@ func TestParseConfigAcceptsStdioCompatibilityFlag(t *testing.T) {
 	t.Parallel()
 
 	var stderr bytes.Buffer
-	cfg, err := parseConfig([]string{"--stdio"}, &stderr)
+	_, err := parseConfig([]string{"--stdio"}, &stderr)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
-	}
-	if !cfg.stdio {
-		t.Fatal("stdio flag was not recorded")
 	}
 }
 

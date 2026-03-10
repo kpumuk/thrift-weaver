@@ -650,25 +650,23 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 		ParseWorkers:   s.workspaceIndexWorkers,
 		Hooks:          s.workspaceIndexHooks(),
 	})
+	keepManager := false
+	defer func() {
+		if !keepManager {
+			manager.Close()
+		}
+	}()
 
 	store, err := s.requireStore()
 	if err != nil {
-		manager.Close()
 		return err
 	}
 	for _, snap := range store.Snapshots() {
-		if err := manager.UpsertOpenDocumentWithReason(ctx, index.DocumentInput{
-			URI:        snap.URI,
-			Version:    snap.Version,
-			Generation: snap.Generation,
-			Source:     snap.Bytes(),
-		}, index.RebuildReasonOpen); err != nil {
-			manager.Close()
+		if err := manager.UpsertOpenDocumentWithReason(ctx, workspaceDocumentInput(snap), index.RebuildReasonOpen); err != nil {
 			return err
 		}
 	}
 	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, index.RebuildReasonManualRescan); err != nil {
-		manager.Close()
 		return err
 	}
 
@@ -680,6 +678,7 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 	if old != nil {
 		old.Close()
 	}
+	keepManager = true
 	return nil
 }
 
@@ -785,12 +784,7 @@ func (s *Server) syncWorkspaceDocumentWithReason(ctx context.Context, uri string
 	if snap == nil {
 		return nil
 	}
-	if err := manager.UpsertOpenDocumentWithReason(ctx, index.DocumentInput{
-		URI:        snap.URI,
-		Version:    snap.Version,
-		Generation: snap.Generation,
-		Source:     snap.Bytes(),
-	}, reason); err != nil {
+	if err := manager.UpsertOpenDocumentWithReason(ctx, workspaceDocumentInput(snap), reason); err != nil {
 		return err
 	}
 	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, reason); err != nil {
@@ -1157,24 +1151,12 @@ func compareDiagnostics(a, b Diagnostic) int {
 		return a.Severity - b.Severity
 	}
 	if a.Source != b.Source {
-		if a.Source < b.Source {
-			return -1
-		}
-		return 1
+		return strings.Compare(a.Source, b.Source)
 	}
 	if a.Code != b.Code {
-		if a.Code < b.Code {
-			return -1
-		}
-		return 1
+		return strings.Compare(a.Code, b.Code)
 	}
-	if a.Message < b.Message {
-		return -1
-	}
-	if a.Message > b.Message {
-		return 1
-	}
-	return 0
+	return strings.Compare(a.Message, b.Message)
 }
 
 func comparePosition(a, b Position) int {
@@ -1541,6 +1523,18 @@ func (s *Server) isWorkspaceLintJobCurrent(uri string, version int32, generation
 
 func snapshotMatchesVersion(snap *Snapshot, version int32, generation uint64) bool {
 	return snap != nil && snap.Version == version && snap.Generation == generation
+}
+
+func workspaceDocumentInput(snap *Snapshot) index.DocumentInput {
+	if snap == nil {
+		return index.DocumentInput{}
+	}
+	return index.DocumentInput{
+		URI:        snap.URI,
+		Version:    snap.Version,
+		Generation: snap.Generation,
+		Source:     snap.Bytes(),
+	}
 }
 
 func canonicalDocumentURI(raw string) (string, error) {

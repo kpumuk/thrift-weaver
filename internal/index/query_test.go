@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kpumuk/thrift-weaver/internal/testutil"
 	"github.com/kpumuk/thrift-weaver/internal/text"
@@ -18,7 +17,6 @@ func TestManagerDefinitionReferencesAndWorkspaceSymbols(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "navigation")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -88,7 +86,6 @@ func TestManagerDefinitionAndWorkspaceSymbolsWorkBeforeDiscoveryCompletes(t *tes
 	root := testutil.CopyWorkspaceFixture(t, "navigation")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	mainPath := filepath.Join(root, "main.thrift")
 	mainSource := testutil.ReadFile(t, mainPath)
@@ -171,7 +168,6 @@ func TestManagerDefinitionAndReferencesReturnEmptyForUnresolvedBinding(t *testin
 	root := testutil.CopyWorkspaceFixture(t, "missing_include")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -212,7 +208,6 @@ func TestManagerDefinitionRejectsContentModified(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "navigation")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -246,7 +241,6 @@ func TestManagerPrepareRenameAndRename(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "rename")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -309,7 +303,6 @@ func TestManagerRenameRequiresDiscoveryComplete(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "rename")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	mainPath := filepath.Join(root, "main.thrift")
 	mainSource := testutil.ReadFile(t, mainPath)
@@ -385,7 +378,6 @@ func TestManagerRenameBlocksInvalidName(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "rename")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)
@@ -412,7 +404,6 @@ func TestManagerPrepareRenameBlocksAmbiguousReference(t *testing.T) {
 	root := testutil.CopyWorkspaceFixture(t, "duplicate_alias")
 	m := NewManager(Options{WorkspaceRoots: []string{root}})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)

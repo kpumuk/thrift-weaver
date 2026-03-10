@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	parserbackend "github.com/kpumuk/thrift-weaver/internal/syntax/backend"
@@ -55,7 +54,6 @@ func TestManagerRescanWorkspaceReusesParsersWithinWorkerLimit(t *testing.T) {
 		ParseWorkers:   2,
 	})
 	defer m.Close()
-	m.setRescanIntervalForTesting(5 * time.Minute)
 
 	if err := m.RescanWorkspace(context.Background()); err != nil {
 		t.Fatalf("RescanWorkspace: %v", err)

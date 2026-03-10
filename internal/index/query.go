@@ -217,55 +217,55 @@ func (m *Manager) queryRenameTarget(ctx context.Context, doc QueryDocument, pos 
 
 	ref, ok := referenceAtOffset(qctx.view.Document, qctx.offset)
 	if !ok {
-		return qctx, nil, []IndexDiagnostic{renameBlocker(
+		return qctx, nil, renameBlockers(
 			qctx.view.Document.URI,
 			DiagnosticRenameTargetUnavailable,
 			"rename requires a declaration or exact bound reference",
 			text.Span{Start: qctx.offset, End: qctx.offset},
-		)}, nil
+		), nil
 	}
 
 	switch ref.Binding.Status {
 	case BindingStatusBound:
 		symbol, ok := qctx.snapshot.SymbolsByID[ref.Binding.Target]
 		if !ok {
-			return qctx, nil, []IndexDiagnostic{renameBlocker(
+			return qctx, nil, renameBlockers(
 				ref.URI,
 				DiagnosticRenameTargetUnavailable,
 				"rename target is no longer available",
 				renameReferenceSpan(ref),
-			)}, nil
+			), nil
 		}
 		return qctx, &renameTarget{symbol: symbol, span: renameReferenceSpan(ref)}, nil, nil
 	case BindingStatusTainted:
-		return qctx, nil, []IndexDiagnostic{renameBlocker(
+		return qctx, nil, renameBlockers(
 			ref.URI,
 			DiagnosticRenameTargetTainted,
 			"rename is blocked because the reference is tainted by parser recovery",
 			renameReferenceSpan(ref),
-		)}, nil
+		), nil
 	case BindingStatusAmbiguous:
-		return qctx, nil, []IndexDiagnostic{renameBlocker(
+		return qctx, nil, renameBlockers(
 			ref.URI,
 			DiagnosticRenameTargetAmbiguous,
 			"rename is blocked because the reference is ambiguous",
 			renameReferenceSpan(ref),
-		)}, nil
+		), nil
 	case BindingStatusUnknown, BindingStatusUnresolved, BindingStatusUnsupported:
-		return qctx, nil, []IndexDiagnostic{renameBlocker(
+		return qctx, nil, renameBlockers(
 			ref.URI,
 			DiagnosticRenameTargetUnavailable,
 			"rename requires an exact bound reference",
 			renameReferenceSpan(ref),
-		)}, nil
+		), nil
 	}
 
-	return qctx, nil, []IndexDiagnostic{renameBlocker(
+	return qctx, nil, renameBlockers(
 		ref.URI,
 		DiagnosticRenameTargetUnavailable,
 		"rename requires an exact bound reference",
 		renameReferenceSpan(ref),
-	)}, nil
+	), nil
 }
 
 func (m *Manager) queryDocumentContext(ctx context.Context, doc QueryDocument, pos text.UTF16Position) (queryContext, error) {
@@ -591,33 +591,17 @@ func renameBlocker(uri, code, message string, span text.Span) IndexDiagnostic {
 	return newDiagnostic(uri, code, message, syntax.SeverityError, span)
 }
 
+func renameBlockers(uri, code, message string, span text.Span) []IndexDiagnostic {
+	return []IndexDiagnostic{renameBlocker(uri, code, message, span)}
+}
+
 func invalidRenameIdentifier(target Symbol, message string) *IndexDiagnostic {
 	diag := renameBlocker(target.URI, DiagnosticRenameInvalidName, message, target.NameSpan)
 	return &diag
 }
 
 func sortLocations(locations []Location) {
-	slices.SortFunc(locations, func(a, b Location) int {
-		if a.URI < b.URI {
-			return -1
-		}
-		if a.URI > b.URI {
-			return 1
-		}
-		if a.Span.Start < b.Span.Start {
-			return -1
-		}
-		if a.Span.Start > b.Span.Start {
-			return 1
-		}
-		if a.Span.End < b.Span.End {
-			return -1
-		}
-		if a.Span.End > b.Span.End {
-			return 1
-		}
-		return 0
-	})
+	slices.SortFunc(locations, compareLocations)
 }
 
 func sortByteEditsDescending(edits []text.ByteEdit) {
@@ -639,25 +623,38 @@ func sortByteEditsDescending(edits []text.ByteEdit) {
 }
 
 func compareWorkspaceSymbols(a, b WorkspaceSymbol) int {
-	if a.Name < b.Name {
+	if cmp := strings.Compare(a.Name, b.Name); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(a.URI, b.URI); cmp != 0 {
+		return cmp
+	}
+	return compareByteOffsets(a.Span.Start, b.Span.Start)
+}
+
+func compareLocations(a, b Location) int {
+	if cmp := strings.Compare(a.URI, b.URI); cmp != 0 {
+		return cmp
+	}
+	return compareSpans(a.Span, b.Span)
+}
+
+func compareSpans(a, b text.Span) int {
+	if cmp := compareByteOffsets(a.Start, b.Start); cmp != 0 {
+		return cmp
+	}
+	return compareByteOffsets(a.End, b.End)
+}
+
+func compareByteOffsets(a, b text.ByteOffset) int {
+	switch {
+	case a < b:
 		return -1
-	}
-	if a.Name > b.Name {
+	case a > b:
 		return 1
+	default:
+		return 0
 	}
-	if a.URI < b.URI {
-		return -1
-	}
-	if a.URI > b.URI {
-		return 1
-	}
-	if a.Span.Start < b.Span.Start {
-		return -1
-	}
-	if a.Span.Start > b.Span.Start {
-		return 1
-	}
-	return 0
 }
 
 func contextOrBackground(ctx context.Context) context.Context {
