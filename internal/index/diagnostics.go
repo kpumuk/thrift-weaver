@@ -60,3 +60,19 @@ func cloneDiagnostics(in []IndexDiagnostic) []IndexDiagnostic {
 	copy(out, in)
 	return out
 }
+
+// ViewForDocument returns the indexed document view for uri within snapshot.
+func ViewForDocument(snapshot *WorkspaceSnapshot, uri string) (*DocumentView, bool, error) {
+	if snapshot == nil {
+		return nil, false, nil
+	}
+	_, key, err := CanonicalizeDocumentURI(uri)
+	if err != nil {
+		return nil, false, err
+	}
+	doc := snapshot.Documents[key]
+	if doc == nil {
+		return nil, false, nil
+	}
+	return &DocumentView{Document: doc, Snapshot: snapshot}, true, nil
+}

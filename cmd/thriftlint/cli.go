@@ -7,10 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/lint"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	"github.com/kpumuk/thrift-weaver/internal/text"
@@ -23,6 +26,10 @@ const (
 
 	outputFormatText = "text"
 	outputFormatJSON = "json"
+
+	crossFileOff        = "off"
+	crossFileTransitive = "transitive"
+	crossFileWorkspace  = "workspace"
 )
 
 type cliOptions struct {
@@ -30,6 +37,9 @@ type cliOptions struct {
 	assumeFilename string
 	format         string
 	path           string
+	crossFile      string
+	workspaceRoots []string
+	includeDirs    []string
 }
 
 type diagnosticJSON struct {
@@ -66,7 +76,7 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []
 	}
 	defer tree.Close()
 
-	diags, err := collectDiagnostics(ctx, tree)
+	diags, err := collectDiagnosticsWithWorkspace(ctx, tree, src, uri, opts)
 	if err != nil {
 		writef(stderr, "thriftlint: lint failed: %v\n", err)
 		return exitInternal
@@ -91,6 +101,9 @@ func parseArgs(args []string) (cliOptions, string, error) {
 	fs.BoolVar(&opts.stdin, "stdin", false, "read input from stdin")
 	fs.StringVar(&opts.assumeFilename, "assume-filename", "", "filename/URI used for parser context and diagnostics")
 	fs.StringVar(&opts.format, "format", outputFormatText, "diagnostic output format: text|json")
+	fs.StringVar(&opts.crossFile, "cross-file", "", "cross-file analysis mode: off|transitive|workspace")
+	fs.Var((*multiStringFlag)(&opts.workspaceRoots), "workspace-root", "workspace root used for cross-file analysis (repeatable)")
+	fs.Var((*multiStringFlag)(&opts.includeDirs), "include-dir", "include directory used for cross-file analysis (repeatable)")
 
 	usage := cliUsage(fs)
 	if err := fs.Parse(args); err != nil {
@@ -99,6 +112,12 @@ func parseArgs(args []string) (cliOptions, string, error) {
 
 	if !isSupportedOutputFormat(opts.format) {
 		return cliOptions{}, usage, errors.New("--format must be one of: text, json")
+	}
+	if opts.crossFile == "" {
+		opts.crossFile = defaultCrossFileMode(opts.stdin)
+	}
+	if !isSupportedCrossFileMode(opts.crossFile) {
+		return cliOptions{}, usage, errors.New("--cross-file must be one of: off, transitive, workspace")
 	}
 
 	rest := fs.Args()
@@ -112,6 +131,9 @@ func parseArgs(args []string) (cliOptions, string, error) {
 	}
 	if !opts.stdin {
 		opts.path = rest[0]
+	}
+	if opts.stdin && opts.crossFile != crossFileOff && opts.assumeFilename == "" {
+		return cliOptions{}, usage, errors.New("--assume-filename is required when --stdin uses cross-file analysis")
 	}
 	return opts, usage, nil
 }
@@ -162,6 +184,70 @@ func collectDiagnostics(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagno
 	return combined, nil
 }
 
+func collectDiagnosticsWithWorkspace(ctx context.Context, tree *syntax.Tree, src []byte, uri string, opts cliOptions) ([]syntax.Diagnostic, error) {
+	combined, err := collectDiagnostics(ctx, tree)
+	if err != nil {
+		return nil, err
+	}
+	if opts.crossFile == crossFileOff {
+		return combined, nil
+	}
+
+	workspaceDiags, err := collectWorkspaceDiagnostics(ctx, src, uri, opts)
+	if err != nil {
+		return nil, err
+	}
+	combined = append(combined, workspaceDiags...)
+	lint.SortDiagnostics(combined)
+	return combined, nil
+}
+
+func collectWorkspaceDiagnostics(ctx context.Context, src []byte, uri string, opts cliOptions) ([]syntax.Diagnostic, error) {
+	view, err := workspaceViewForInput(ctx, src, uri, opts)
+	if err != nil || view == nil {
+		return nil, err
+	}
+	return defaultLintRunner.RunWithWorkspace(ctx, view)
+}
+
+func workspaceViewForInput(ctx context.Context, src []byte, uri string, opts cliOptions) (*index.DocumentView, error) {
+	roots, err := workspaceRootsForInput(opts, uri)
+	if err != nil {
+		return nil, err
+	}
+
+	manager := index.NewManager(index.Options{
+		WorkspaceRoots: roots,
+		IncludeDirs:    opts.includeDirs,
+	})
+	defer manager.Close()
+
+	if err := manager.RescanWorkspace(ctx); err != nil {
+		return nil, err
+	}
+	if err := manager.UpsertOpenDocument(ctx, index.DocumentInput{
+		URI:        uri,
+		Version:    -1,
+		Generation: 0,
+		Source:     src,
+	}); err != nil {
+		return nil, err
+	}
+
+	snapshot, ok := manager.Snapshot()
+	if !ok {
+		return nil, nil
+	}
+	view, ok, err := index.ViewForDocument(snapshot, uri)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return view, nil
+}
+
 func isSupportedOutputFormat(v string) bool {
 	switch v {
 	case outputFormatText, outputFormatJSON:
@@ -181,6 +267,48 @@ func writeDiagnosticsOutput(format string, stdout, stderr io.Writer, tree *synta
 	default:
 		return fmt.Errorf("unsupported --format %q", format)
 	}
+}
+
+func workspaceRootsForInput(opts cliOptions, uri string) ([]string, error) {
+	roots := slices.Clone(opts.workspaceRoots)
+	if len(roots) > 0 {
+		return roots, nil
+	}
+
+	targetPath, err := filePathFromURI(uri)
+	if err != nil {
+		return nil, err
+	}
+	targetRoot := filepath.Dir(targetPath)
+
+	switch opts.crossFile {
+	case crossFileOff:
+		return nil, nil
+	case crossFileTransitive:
+		return []string{targetRoot}, nil
+	case crossFileWorkspace:
+		if opts.stdin {
+			return nil, errors.New("--workspace-root is required for --cross-file workspace with --stdin")
+		}
+		return []string{targetRoot}, nil
+	default:
+		return nil, fmt.Errorf("unsupported --cross-file %q", opts.crossFile)
+	}
+}
+
+func filePathFromURI(raw string) (string, error) {
+	displayURI, _, err := index.CanonicalizeDocumentURI(raw)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(displayURI)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "file" {
+		return "", fmt.Errorf("unsupported URI scheme %q", u.Scheme)
+	}
+	return filepath.Clean(filepath.FromSlash(u.Path)), nil
 }
 
 func writeDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnostic) {
@@ -203,6 +331,40 @@ func writeDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnostic)
 		writeDiagnosticHeader(w, prefix, li, d)
 		writeDiagnosticSnippet(w, tree, li, d)
 	}
+}
+
+func isSupportedCrossFileMode(v string) bool {
+	switch v {
+	case crossFileOff, crossFileTransitive, crossFileWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultCrossFileMode(stdin bool) string {
+	if stdin {
+		return crossFileOff
+	}
+	return crossFileTransitive
+}
+
+type multiStringFlag []string
+
+func (f *multiStringFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *multiStringFlag) Set(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return errors.New("value must not be empty")
+	}
+	*f = append(*f, v)
+	return nil
 }
 
 func lineIndexOrBuild(tree *syntax.Tree) *text.LineIndex {

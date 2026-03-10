@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	parserbackend "github.com/kpumuk/thrift-weaver/internal/syntax/backend"
 	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
+	"github.com/kpumuk/thrift-weaver/internal/testutil"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
 
@@ -512,6 +515,193 @@ func TestServerSuppressesStaleDiagnosticsAcrossCloseReopenSameVersion(t *testing
 	}
 }
 
+func TestServerRunPublishesWorkspaceDiagnosticsAndClearsOnFix(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "missing_include")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+
+	s := NewServer()
+	s.setLintDebounceForTesting(10 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+
+	time.Sleep(60 * time.Millisecond)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct Holder {\n  1: string name,\n}\n",
+			}},
+		}),
+	})
+
+	time.Sleep(80 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if !diagnosticsContainVersionAndCode(notifications, 1, "LINT_INCLUDE_TARGET_UNKNOWN") {
+		t.Fatalf("missing version 1 workspace diagnostics: %+v", notifications)
+	}
+	if !diagnosticsContainVersionAndCode(notifications, 1, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
+		t.Fatalf("missing version 1 qualified reference diagnostics: %+v", notifications)
+	}
+
+	final := latestDiagnosticsForVersion(t, notifications, 2)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected workspace diagnostics cleared after fix, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunSuppressesStaleWorkspaceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "missing_include")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+
+	s := NewServer()
+	s.setLintDebounceForTesting(40 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: mainText + "\n",
+			}},
+		}),
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 3},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct Holder {\n  1: string name,\n}\n",
+			}},
+		}),
+	})
+
+	time.Sleep(100 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	for _, diag := range notifications {
+		if diag.Version != nil && *diag.Version == 2 && containsDiagnosticCode(diag.Diagnostics, "LINT_INCLUDE_TARGET_UNKNOWN") {
+			t.Fatalf("stale version 2 workspace diagnostics were published: %+v", notifications)
+		}
+	}
+
+	final := latestDiagnosticsForVersion(t, notifications, 3)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected final version 3 diagnostics cleared, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "shadowing")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	sharedURI := mustCanonicalURI(t, sharedPath)
+
+	s := NewServer()
+	s.setLintDebounceForTesting(10 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: string(testutil.ReadFile(t, mainPath))},
+		}),
+	})
+
+	time.Sleep(40 * time.Millisecond)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: sharedURI, Version: 1, Text: "struct Person {\n  1: string name,\n}\n"},
+		}),
+	})
+
+	time.Sleep(60 * time.Millisecond)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didClose",
+		Params:  mustJSON(t, DidCloseParams{TextDocument: TextDocumentIdentifier{URI: sharedURI}}),
+	})
+
+	time.Sleep(80 * time.Millisecond)
+	stopServerAsync(t, pw, errCh)
+
+	mainDiagnostics := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if !diagnosticsContainVersionAndCode(mainDiagnostics, 1, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
+		t.Fatalf("missing dependent workspace diagnostics after shadowing include: %+v", mainDiagnostics)
+	}
+	if len(latestDiagnosticsForVersion(t, mainDiagnostics, 1).Diagnostics) != 0 {
+		t.Fatalf("expected latest main diagnostics to clear after closing shadow, got %+v", latestDiagnosticsForVersion(t, mainDiagnostics, 1).Diagnostics)
+	}
+}
+
 func TestServerRunDocumentFormattingSuccessNoOpRefusalAndStale(t *testing.T) {
 	t.Parallel()
 
@@ -978,6 +1168,57 @@ func int32Ptr(v int32) *int32 {
 	p := new(int32)
 	*p = v
 	return p
+}
+
+func mustCanonicalURI(t *testing.T, path string) string {
+	t.Helper()
+	uri, _, err := index.CanonicalizeDocumentURI(path)
+	if err != nil {
+		t.Fatalf("CanonicalizeDocumentURI(%s): %v", path, err)
+	}
+	return uri
+}
+
+func diagnosticsForURI(t *testing.T, msgs []testFrame, uri string) []PublishDiagnosticsParams {
+	t.Helper()
+	notifications := collectPublishDiagnosticsMessages(t, msgs)
+	out := make([]PublishDiagnosticsParams, 0, len(notifications))
+	for _, msg := range notifications {
+		var diag PublishDiagnosticsParams
+		marshalRoundtrip(t, msg.Params, &diag)
+		if diag.URI == uri {
+			out = append(out, diag)
+		}
+	}
+	return out
+}
+
+func diagnosticsContainVersionAndCode(diags []PublishDiagnosticsParams, version int32, code string) bool {
+	for _, diag := range diags {
+		if diag.Version != nil && *diag.Version == version && containsDiagnosticCode(diag.Diagnostics, code) {
+			return true
+		}
+	}
+	return false
+}
+
+func latestDiagnosticsForVersion(t *testing.T, diags []PublishDiagnosticsParams, version int32) PublishDiagnosticsParams {
+	t.Helper()
+	var (
+		found bool
+		last  PublishDiagnosticsParams
+	)
+	for _, diag := range diags {
+		if diag.Version == nil || *diag.Version != version {
+			continue
+		}
+		found = true
+		last = diag
+	}
+	if !found {
+		t.Fatalf("missing diagnostics for version %d in %+v", version, diags)
+	}
+	return last
 }
 
 type testFrame struct {

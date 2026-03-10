@@ -161,6 +161,40 @@ func (s *SnapshotStore) SnapshotAtVersion(uri string, version int32) (*Snapshot,
 	return snap, nil
 }
 
+// Snapshots returns the current immutable document snapshots in deterministic URI order.
+func (s *SnapshotStore) Snapshots() []*Snapshot {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.RLock()
+	docs := make([]*documentState, 0, len(s.docs))
+	for _, doc := range s.docs {
+		docs = append(docs, doc)
+	}
+	s.mu.RUnlock()
+
+	out := make([]*Snapshot, 0, len(docs))
+	for _, doc := range docs {
+		doc.mu.RLock()
+		snap := doc.snapshot
+		doc.mu.RUnlock()
+		if snap != nil {
+			out = append(out, snap)
+		}
+	}
+	slices.SortFunc(out, func(a, b *Snapshot) int {
+		if a.URI < b.URI {
+			return -1
+		}
+		if a.URI > b.URI {
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
 func (s *SnapshotStore) documentState(uri string, create bool) (*documentState, string, error) {
 	canonicalURI, key, err := index.CanonicalizeDocumentURI(uri)
 	if err != nil {

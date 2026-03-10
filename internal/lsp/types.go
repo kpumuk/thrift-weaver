@@ -35,7 +35,14 @@ type CancelParams struct {
 
 // InitializeParams is the LSP initialize request payload subset used in v1.
 type InitializeParams struct {
-	ProcessID *int64 `json:"processId,omitempty"`
+	ProcessID        *int64            `json:"processId,omitempty"`
+	WorkspaceFolders []WorkspaceFolder `json:"workspaceFolders,omitempty"`
+}
+
+// WorkspaceFolder is the LSP workspace folder descriptor used during initialize.
+type WorkspaceFolder struct {
+	URI  string `json:"uri"`
+	Name string `json:"name,omitempty"`
 }
 
 // InitializeResult is the LSP initialize response payload.
