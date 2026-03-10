@@ -1800,7 +1800,7 @@ func lspErrorCodeForQuery(err error) int {
 		return jsonRPCInvalidParams
 	case errors.Is(err, index.ErrContentModified):
 		return lspErrorContentModified
-	case errors.Is(err, index.ErrWorkspaceClosed), errors.Is(err, index.ErrRenameBlocked):
+	case errors.Is(err, index.ErrWorkspaceClosed), errors.Is(err, index.ErrWorkspaceIncomplete), errors.Is(err, index.ErrRenameBlocked):
 		return lspErrorRequestFailed
 	default:
 		return jsonRPCInternalError

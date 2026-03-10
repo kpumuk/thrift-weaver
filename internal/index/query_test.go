@@ -82,6 +82,89 @@ func TestManagerDefinitionReferencesAndWorkspaceSymbols(t *testing.T) {
 	}
 }
 
+func TestManagerDefinitionAndWorkspaceSymbolsWorkBeforeDiscoveryCompletes(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	m := NewManager(Options{WorkspaceRoots: []string{root}})
+	defer m.Close()
+	m.setRescanIntervalForTesting(5 * time.Minute)
+
+	mainPath := filepath.Join(root, "main.thrift")
+	mainSource := testutil.ReadFile(t, mainPath)
+	if err := m.UpsertOpenDocumentWithReason(context.Background(), DocumentInput{
+		URI:        mainPath,
+		Version:    1,
+		Generation: 1,
+		Source:     mainSource,
+	}, RebuildReasonOpen); err != nil {
+		t.Fatalf("UpsertOpenDocumentWithReason: %v", err)
+	}
+	if err := m.RefreshOpenDocumentClosureWithReason(context.Background(), RebuildReasonOpen); err != nil {
+		t.Fatalf("RefreshOpenDocumentClosureWithReason: %v", err)
+	}
+
+	doc := mustDocument(t, mustSnapshot(t, m), mainPath)
+	userPos := mustUTF16PositionForSubstring(t, mainSource, "types.User input")
+
+	definitions, meta, err := m.Definition(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, userPos)
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if meta.DiscoveryComplete {
+		t.Fatal("definition query should report incomplete discovery before workspace rescan")
+	}
+	if len(definitions) != 1 || locationText(t, definitions[0]) != "User" {
+		t.Fatalf("definition results=%+v", definitions)
+	}
+
+	if _, meta, err = m.References(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, userPos, true); !errors.Is(err, ErrWorkspaceIncomplete) {
+		t.Fatalf("References error=%v, want %v", err, ErrWorkspaceIncomplete)
+	}
+	if meta.DiscoveryComplete {
+		t.Fatal("references query should report incomplete discovery before workspace rescan")
+	}
+
+	symbols, meta, err := m.WorkspaceSymbols(context.Background(), "user")
+	if err != nil {
+		t.Fatalf("WorkspaceSymbols: %v", err)
+	}
+	if meta.DiscoveryComplete {
+		t.Fatal("workspace symbols should report incomplete discovery before workspace rescan")
+	}
+	if len(symbols) != 2 {
+		t.Fatalf("workspace symbols=%+v, want two loaded symbols", symbols)
+	}
+
+	if err := m.RescanWorkspaceWithReason(context.Background(), RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	doc = mustDocument(t, mustSnapshot(t, m), mainPath)
+	references, meta, err := m.References(context.Background(), QueryDocument{
+		URI:        doc.URI,
+		Version:    doc.Version,
+		Generation: doc.Generation,
+	}, userPos, true)
+	if err != nil {
+		t.Fatalf("References after rescan: %v", err)
+	}
+	if !meta.DiscoveryComplete {
+		t.Fatal("references query should report complete discovery after workspace rescan")
+	}
+	if len(references) != 3 {
+		t.Fatalf("len(References)=%d, want 3", len(references))
+	}
+}
+
 func TestManagerDefinitionAndReferencesReturnEmptyForUnresolvedBinding(t *testing.T) {
 	t.Parallel()
 

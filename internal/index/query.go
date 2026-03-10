@@ -53,6 +53,9 @@ func (m *Manager) References(ctx context.Context, doc QueryDocument, pos text.UT
 	if symbol == nil {
 		return []Location{}, qctx.meta, nil
 	}
+	if !qctx.meta.DiscoveryComplete {
+		return nil, qctx.meta, ErrWorkspaceIncomplete
+	}
 
 	refs := qctx.snapshot.RefsByTarget[symbol.ID]
 	out := make([]Location, 0, len(refs)+1)
@@ -83,7 +86,10 @@ func (m *Manager) WorkspaceSymbols(ctx context.Context, query string) (symbols [
 	if !ok || snapshot == nil {
 		return nil, QueryMeta{}, ErrWorkspaceClosed
 	}
-	meta = QueryMeta{WorkspaceGeneration: snapshot.Generation}
+	meta = QueryMeta{
+		WorkspaceGeneration: snapshot.Generation,
+		DiscoveryComplete:   snapshot.DiscoveryComplete,
+	}
 	query = strings.TrimSpace(strings.ToLower(query))
 
 	out := make([]WorkspaceSymbol, 0, len(snapshot.SymbolsByID))
@@ -292,6 +298,7 @@ func (m *Manager) queryDocumentContext(ctx context.Context, doc QueryDocument, p
 		DocumentURI:         view.Document.URI,
 		DocumentVersion:     view.Document.Version,
 		DocumentGeneration:  view.Document.Generation,
+		DiscoveryComplete:   snapshot.DiscoveryComplete,
 	}
 	return queryContext{
 		snapshot: snapshot,

@@ -528,28 +528,11 @@ func TestServerSuppressesStaleDiagnosticsAcrossCloseReopenSameVersion(t *testing
 func TestServerRunPublishesWorkspaceDiagnosticsAndClearsOnFix(t *testing.T) {
 	t.Parallel()
 
-	root := testutil.CopyWorkspaceFixture(t, "missing_include")
-	rootURI := mustCanonicalURI(t, root)
-	mainPath := filepath.Join(root, "main.thrift")
-	mainURI := mustCanonicalURI(t, mainPath)
-	mainText := string(testutil.ReadFile(t, mainPath))
-
-	s := NewServer()
+	_, s, manager, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "missing_include")
 	var out bytes.Buffer
 	s.attachRuntime(t.Context(), &out)
 	defer s.detachRuntime()
 
-	if _, err := s.Initialize(context.Background(), InitializeParams{
-		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
-	}); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-	if err := s.DidOpen(context.Background(), DidOpenParams{
-		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
-	}); err != nil {
-		t.Fatalf("DidOpen: %v", err)
-	}
-	waitForWorkspaceLintPropagation()
 	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
 		t.Fatalf("publishDiagnosticsForURI: %v", err)
 	}
@@ -557,13 +540,22 @@ func TestServerRunPublishesWorkspaceDiagnosticsAndClearsOnFix(t *testing.T) {
 		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(open): %v", err)
 	}
 
-	if err := s.DidChange(context.Background(), DidChangeParams{
-		TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 2},
-		ContentChanges: []TextDocumentContentChangeEvent{{
-			Text: "struct Holder {\n  1: string name,\n}\n",
-		}},
-	}); err != nil {
-		t.Fatalf("DidChange: %v", err)
+	snap, err := s.store.Change(context.Background(), mainURI, 2, []TextDocumentContentChangeEvent{{
+		Text: "struct Holder {\n  1: string name,\n}\n",
+	}})
+	if err != nil {
+		t.Fatalf("store.Change: %v", err)
+	}
+	if err := manager.UpsertOpenDocumentWithReason(context.Background(), index.DocumentInput{
+		URI:        snap.URI,
+		Version:    snap.Version,
+		Generation: snap.Generation,
+		Source:     snap.Bytes(),
+	}, index.RebuildReasonChange); err != nil {
+		t.Fatalf("UpsertOpenDocumentWithReason: %v", err)
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(context.Background(), index.RebuildReasonChange); err != nil {
+		t.Fatalf("RefreshOpenDocumentClosureWithReason: %v", err)
 	}
 	if err := s.publishSyntaxDiagnosticsForURI(mainURI); err != nil {
 		t.Fatalf("publishSyntaxDiagnosticsForURI: %v", err)
@@ -714,74 +706,20 @@ func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T)
 	}
 }
 
-func TestServerRunNavigationQueries(t *testing.T) {
+func TestServerNavigationQueriesUseLoadedGraphBeforeDiscoveryCompletes(t *testing.T) {
 	t.Parallel()
 
-	root := testutil.CopyWorkspaceFixture(t, "navigation")
-	rootURI := mustCanonicalURI(t, root)
-	mainPath := filepath.Join(root, "main.thrift")
-	mainURI := mustCanonicalURI(t, mainPath)
+	root, s, _, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
 	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
-	mainText := string(testutil.ReadFile(t, mainPath))
-	userPos := mustLSPPositionForSubstring(t, []byte(mainText), "types.User input")
+	userPos := mustLSPPositionForSubstring(t, mainText, "types.User input")
 
-	var in bytes.Buffer
-	writeReqFrame(t, &in, Request{
-		JSONRPC: JSONRPCVersion,
-		ID:      json.RawMessage(`30`),
-		Method:  "initialize",
-		Params: mustJSON(t, InitializeParams{
-			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
-		}),
+	definitions, err := s.Definition(context.Background(), DefinitionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     userPos,
 	})
-	writeReqFrame(t, &in, Request{
-		JSONRPC: JSONRPCVersion,
-		Method:  "textDocument/didOpen",
-		Params: mustJSON(t, DidOpenParams{
-			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
-		}),
-	})
-	writeReqFrame(t, &in, Request{
-		JSONRPC: JSONRPCVersion,
-		ID:      json.RawMessage(`31`),
-		Method:  "textDocument/definition",
-		Params: mustJSON(t, DefinitionParams{
-			TextDocument: TextDocumentIdentifier{URI: mainURI},
-			Position:     userPos,
-		}),
-	})
-	writeReqFrame(t, &in, Request{
-		JSONRPC: JSONRPCVersion,
-		ID:      json.RawMessage(`32`),
-		Method:  "textDocument/references",
-		Params: mustJSON(t, ReferenceParams{
-			TextDocumentPositionParams: TextDocumentPositionParams{
-				TextDocument: TextDocumentIdentifier{URI: mainURI},
-				Position:     userPos,
-			},
-			Context: ReferenceContext{IncludeDeclaration: true},
-		}),
-	})
-	writeReqFrame(t, &in, Request{
-		JSONRPC: JSONRPCVersion,
-		ID:      json.RawMessage(`33`),
-		Method:  "workspace/symbol",
-		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "user"}),
-	})
-
-	var out bytes.Buffer
-	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
-		t.Fatalf("Run: %v", err)
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
 	}
-
-	msgs := readAllFrames(t, out.Bytes())
-
-	defResp := responseByID(t, msgs, "31")
-	if defResp.Error != nil {
-		t.Fatalf("definition error: %+v", defResp.Error)
-	}
-	var definitions []Location
-	marshalRoundtrip(t, defResp.Result, &definitions)
 	if len(definitions) != 1 {
 		t.Fatalf("definition count=%d, want 1", len(definitions))
 	}
@@ -792,38 +730,93 @@ func TestServerRunNavigationQueries(t *testing.T) {
 		t.Fatalf("definition text=%q, want %q", got, "User")
 	}
 
-	refResp := responseByID(t, msgs, "32")
-	if refResp.Error != nil {
-		t.Fatalf("references error: %+v", refResp.Error)
-	}
-	var references []Location
-	marshalRoundtrip(t, refResp.Result, &references)
-	if len(references) != 3 {
-		t.Fatalf("references count=%d, want 3", len(references))
-	}
-	gotRefTexts := []string{
-		lspRangeText(t, references[0].URI, references[0].Range),
-		lspRangeText(t, references[1].URI, references[1].Range),
-		lspRangeText(t, references[2].URI, references[2].Range),
-	}
-	wantRefTexts := []string{"types.User", "types.User", "User"}
-	for i := range wantRefTexts {
-		if gotRefTexts[i] != wantRefTexts[i] {
-			t.Fatalf("reference %d text=%q, want %q", i, gotRefTexts[i], wantRefTexts[i])
-		}
+	if _, err := s.References(context.Background(), ReferenceParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		},
+		Context: ReferenceContext{IncludeDeclaration: true},
+	}); !errors.Is(err, index.ErrWorkspaceIncomplete) {
+		t.Fatalf("References error=%v, want %v", err, index.ErrWorkspaceIncomplete)
 	}
 
-	symbolResp := responseByID(t, msgs, "33")
-	if symbolResp.Error != nil {
-		t.Fatalf("workspace/symbol error: %+v", symbolResp.Error)
+	symbols, err := s.WorkspaceSymbols(context.Background(), WorkspaceSymbolParams{Query: "user"})
+	if err != nil {
+		t.Fatalf("WorkspaceSymbols: %v", err)
 	}
-	var symbols []SymbolInformation
-	marshalRoundtrip(t, symbolResp.Result, &symbols)
 	if len(symbols) != 2 {
 		t.Fatalf("workspace symbol count=%d, want 2", len(symbols))
 	}
 	if symbols[0].Name != "User" || symbols[1].Name != "UserError" {
 		t.Fatalf("workspace symbols=%+v, want User and UserError", symbols)
+	}
+}
+
+func TestServerReferencesSucceedAfterWorkspaceDiscoveryCompletes(t *testing.T) {
+	t.Parallel()
+
+	_, s, manager, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	userPos := mustLSPPositionForSubstring(t, mainText, "types.User input")
+
+	if _, err := s.References(context.Background(), ReferenceParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		},
+		Context: ReferenceContext{IncludeDeclaration: true},
+	}); !errors.Is(err, index.ErrWorkspaceIncomplete) {
+		t.Fatalf("References before rescan error=%v, want %v", err, index.ErrWorkspaceIncomplete)
+	}
+
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	references, err := s.References(context.Background(), ReferenceParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		},
+		Context: ReferenceContext{IncludeDeclaration: true},
+	})
+	if err != nil {
+		t.Fatalf("References after rescan: %v", err)
+	}
+	if len(references) != 3 {
+		t.Fatalf("references count=%d, want 3", len(references))
+	}
+}
+
+func TestServerDispatchReferencesReturnRequestFailedWhenDiscoveryIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	_, s, _, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`34`),
+		Method:  "textDocument/references",
+		Params: mustJSON(t, ReferenceParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     mustLSPPositionForSubstring(t, mainText, "types.User input"),
+			},
+			Context: ReferenceContext{IncludeDeclaration: true},
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "34")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("references error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, index.ErrWorkspaceIncomplete.Error()) {
+		t.Fatalf("references message=%q, want workspace discovery incomplete", resp.Error.Message)
 	}
 }
 
@@ -1404,28 +1397,11 @@ func TestServerRunRenameAbortsOnClosedFileDrift(t *testing.T) {
 func TestServerRunWatchedFileChangesRefreshWorkspaceDiagnostics(t *testing.T) {
 	t.Parallel()
 
-	root := testutil.CopyWorkspaceFixture(t, "missing_include")
-	rootURI := mustCanonicalURI(t, root)
-	mainPath := filepath.Join(root, "main.thrift")
-	mainURI := mustCanonicalURI(t, mainPath)
-	mainText := string(testutil.ReadFile(t, mainPath))
-
-	s := NewServer()
+	root, s, manager, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "missing_include")
 	var out bytes.Buffer
 	s.attachRuntime(t.Context(), &out)
 	defer s.detachRuntime()
 
-	if _, err := s.Initialize(context.Background(), InitializeParams{
-		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
-	}); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-	if err := s.DidOpen(context.Background(), DidOpenParams{
-		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
-	}); err != nil {
-		t.Fatalf("DidOpen: %v", err)
-	}
-	waitForWorkspaceLintPropagation()
 	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
 		t.Fatalf("publishDiagnosticsForURI: %v", err)
 	}
@@ -1437,10 +1413,8 @@ func TestServerRunWatchedFileChangesRefreshWorkspaceDiagnostics(t *testing.T) {
 	if err := os.WriteFile(missingPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(%s): %v", missingPath, err)
 	}
-	if err := s.DidChangeWatchedFiles(context.Background(), DidChangeWatchedFilesParams{
-		Changes: []FileEvent{{URI: mustCanonicalURI(t, missingPath), Type: FileChangeTypeCreated}},
-	}); err != nil {
-		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	if err := manager.RefreshDocumentWithReason(context.Background(), mustCanonicalURI(t, missingPath), false, index.RebuildReasonWatch); err != nil {
+		t.Fatalf("RefreshDocumentWithReason: %v", err)
 	}
 	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
 		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(watch): %v", err)
@@ -2033,7 +2007,55 @@ func publishWorkspaceDiagnosticsForCurrentSnapshot(t *testing.T, s *Server, uri 
 	if snap == nil {
 		t.Fatalf("missing open snapshot for %s", uri)
 	}
-	return s.publishWorkspaceLintDiagnostics(context.Background(), uri, snap.Version, snap.Generation)
+	diags, err := s.collectWorkspaceLintDiagnostics(context.Background(), uri, snap.Version, snap.Generation)
+	if err != nil {
+		return err
+	}
+	if len(diags) == 0 && !s.hasDiagnosticBucket(uri, diagnosticBucketWorkspace) {
+		return nil
+	}
+	return s.replaceDiagnosticBuckets(
+		uri,
+		snap.Version,
+		snap.Generation,
+		diagnosticBucketUpdate{bucket: diagnosticBucketWorkspace, diagnostics: diags},
+	)
+}
+
+func openServerWorkspaceMainDocumentForTesting(t *testing.T, fixture string) (string, *Server, *index.Manager, string, []byte) {
+	t.Helper()
+
+	root := testutil.CopyWorkspaceFixture(t, fixture)
+	path := filepath.Join(root, "main.thrift")
+	uri := mustCanonicalURI(t, path)
+	src := testutil.ReadFile(t, path)
+
+	s := NewServer()
+	snap, err := s.store.Open(context.Background(), uri, 1, src)
+	if err != nil {
+		t.Fatalf("store.Open(%s): %v", uri, err)
+	}
+
+	manager := index.NewManager(index.Options{WorkspaceRoots: []string{root}})
+	t.Cleanup(manager.Close)
+	if err := manager.UpsertOpenDocumentWithReason(context.Background(), index.DocumentInput{
+		URI:        snap.URI,
+		Version:    snap.Version,
+		Generation: snap.Generation,
+		Source:     snap.Bytes(),
+	}, index.RebuildReasonOpen); err != nil {
+		t.Fatalf("UpsertOpenDocumentWithReason(%s): %v", uri, err)
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(context.Background(), index.RebuildReasonOpen); err != nil {
+		t.Fatalf("RefreshOpenDocumentClosureWithReason(%s): %v", uri, err)
+	}
+
+	s.workspaceMu.Lock()
+	s.workspace = manager
+	s.workspaceRoots = []string{root}
+	s.workspaceMu.Unlock()
+
+	return root, s, manager, uri, src
 }
 
 func readRespFrame(t *testing.T, r *bufio.Reader) Response {
