@@ -112,6 +112,7 @@ When that happens it prints:
 thriftlint path/to/file.thrift
 thriftlint --stdin --assume-filename foo.thrift < input.thrift
 thriftlint --format json path/to/file.thrift
+thriftlint --cross-file workspace --workspace-root . --include-dir idl path/to/file.thrift
 ```
 
 ### Important flags
@@ -119,6 +120,17 @@ thriftlint --format json path/to/file.thrift
 - `--stdin`: read input from stdin
 - `--assume-filename`: parser context/diagnostic filename when using stdin
 - `--format`: output format, `text` or `json`
+- `--cross-file`: cross-file analysis mode, `off`, `transitive`, or `workspace`
+- `--workspace-root`: workspace root for cross-file analysis, repeatable
+- `--include-dir`: include directory for cross-file analysis, repeatable
+
+### Cross-file analysis modes
+
+- path input defaults to `--cross-file transitive`, which treats the input file's directory as the implicit workspace root when `--workspace-root` is omitted
+- `--stdin` defaults to `--cross-file off`
+- `--cross-file workspace` keeps workspace analysis explicit for stdin and requires both `--assume-filename` and at least one `--workspace-root`
+- `--include-dir` adds extra include search roots on top of the workspace roots
+- `--cross-file off` preserves the original single-document behavior when you want a fast local-only run
 
 ### Exit codes
 
@@ -140,6 +152,14 @@ thriftlint --format json path/to/file.thrift
 - `required` fields are rejected inside `union`
 - negative explicit enum values are rejected
 
+When cross-file analysis is enabled, `thriftlint` also checks:
+
+- include targets resolve to exactly one file
+- include aliases do not collide within the same document
+- qualified references such as `shared.User` resolve in the workspace
+- cross-file `service extends` targets resolve to services
+- cross-file `throws` targets resolve to exceptions
+
 ## `thriftls` (LSP Server)
 
 `thriftls` is a stdio LSP server intended to be launched by editors/clients.
@@ -150,6 +170,11 @@ thriftlint --format json path/to/file.thrift
 ### Features currently implemented
 
 - diagnostics (`didOpen` / `didChange` / `didSave` / `didClose`)
+- cross-file workspace diagnostics over workspace folders and open-document shadows
+- go to definition (`textDocument/definition`)
+- find references (`textDocument/references`)
+- rename for indexed top-level declarations (`textDocument/prepareRename`, `textDocument/rename`)
+- workspace symbol search (`workspace/symbol`)
 - document formatting
 - range formatting
 - document symbols
@@ -164,6 +189,10 @@ thriftlint --format json path/to/file.thrift
 - `didChange`: syntax diagnostics are published immediately; lint is debounced and runs on the full file
 - `didSave`: full-file lint runs immediately
 - `didClose`: diagnostics are cleared
+- workspace folders build a shared index for cross-file diagnostics and navigation
+- if the client provides no workspace folders, `thriftls` uses the directory of the first opened document as an implicit workspace root
+- open unsaved documents shadow on-disk files for diagnostics, definition, references, and rename
+- `workspace/didChangeWatchedFiles` and `workspace/didChangeWorkspaceFolders` refresh the index and republish affected workspace diagnostics
 
 Current debounce:
 
@@ -190,18 +219,17 @@ Changed-range lint:
 
 - changed-range lint is experimental only and is not enabled in the shipped/full-file diagnostic path
 
-### Not implemented yet (examples)
+### Still not implemented yet (examples)
 
-- go to definition
-- rename
 - code actions
+- member-level rename for fields, methods, enum members, or annotations
 
 ### Current runtime/configuration notes
 
 - `thriftls` uses a single embedded wasm parser backend
 - there is no supported backend toggle
 - no user-configurable lint rule toggles or parser timeout knobs are exposed yet
-- semantic lint currently resolves only unqualified names declared in the current document; dotted include-qualified references are skipped until cross-file indexing exists
+- rename is intentionally fail-closed and currently targets top-level declarations only
 - parser cancellation/time limits currently follow the request context; there is no separate configurable hard timeout inside the server
 
 For backend troubleshooting and breaker behavior, see [WASM Runtime and Troubleshooting](/Users/dmytro/work/github/thrift-weaver/docs/wasm-runtime.md).
@@ -264,6 +292,10 @@ Extension defaults for Apache Thrift files:
 
 - syntax highlighting (TextMate)
 - diagnostics
+- go to definition
+- find references
+- rename symbol for indexed top-level declarations
+- workspace symbol search
 - format document / format selection
 - document symbols (Outline)
 - folding ranges
