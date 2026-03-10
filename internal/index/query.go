@@ -673,6 +673,7 @@ func (m *Manager) observeQuery(method string, start time.Time, meta QueryMeta) {
 		Method:              method,
 		Duration:            time.Since(start),
 		WorkspaceGeneration: meta.WorkspaceGeneration,
+		DiscoveryComplete:   meta.DiscoveryComplete,
 	})
 }
 

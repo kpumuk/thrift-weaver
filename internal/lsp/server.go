@@ -45,6 +45,7 @@ type Server struct {
 
 	workspaceMu               sync.Mutex
 	workspace                 *index.Manager
+	workspaceHooks            index.Hooks
 	workspaceRoots            []string
 	workspaceDiscoveryMu      sync.Mutex
 	workspaceDiscoveryRunning bool
@@ -633,7 +634,10 @@ func (s *Server) configureWorkspaceFolders(ctx context.Context, folders []Worksp
 }
 
 func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) error {
-	manager := index.NewManager(index.Options{WorkspaceRoots: roots})
+	manager := index.NewManager(index.Options{
+		WorkspaceRoots: roots,
+		Hooks:          s.workspaceIndexHooks(),
+	})
 
 	store, err := s.requireStore()
 	if err != nil {
@@ -675,6 +679,17 @@ func (s *Server) workspaceManager() *index.Manager {
 	s.workspaceMu.Lock()
 	defer s.workspaceMu.Unlock()
 	return s.workspace
+}
+
+func (s *Server) workspaceIndexHooks() index.Hooks {
+	if s == nil {
+		return index.Hooks{}
+	}
+	s.workspaceMu.Lock()
+	hooks := s.workspaceHooks
+	s.workspaceMu.Unlock()
+	hooks.QueueDepth = s.workspaceDiscoveryQueueDepth
+	return hooks
 }
 
 func (s *Server) closeWorkspaceManager() {
@@ -833,6 +848,18 @@ func (s *Server) shouldRescanWorkspace(manager *index.Manager, reason index.Rebu
 		return true
 	}
 	return reason == index.RebuildReasonWatch || reason == index.RebuildReasonManualRescan
+}
+
+func (s *Server) workspaceDiscoveryQueueDepth() int {
+	if s == nil {
+		return 0
+	}
+	s.workspaceDiscoveryMu.Lock()
+	defer s.workspaceDiscoveryMu.Unlock()
+	if !s.workspaceDiscoveryQueued {
+		return 0
+	}
+	return 1
 }
 
 func (s *Server) latestSnapshot(uri string) (*Snapshot, error) {
@@ -1579,6 +1606,15 @@ func (s *Server) setLintDebounceForTesting(d time.Duration) {
 	s.lintMu.Lock()
 	s.lintDebounce = d
 	s.lintMu.Unlock()
+}
+
+func (s *Server) setWorkspaceHooksForTesting(hooks index.Hooks) {
+	if s == nil {
+		return
+	}
+	s.workspaceMu.Lock()
+	s.workspaceHooks = hooks
+	s.workspaceMu.Unlock()
 }
 
 // cancelRequest records or triggers cancellation for a request id.

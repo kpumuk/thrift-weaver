@@ -19,21 +19,31 @@ type scannedFile struct {
 	ModTime    time.Time
 }
 
-func scanWorkspace(ctx context.Context, roots []string, includeDirs []string, maxFiles int, maxFileBytes int64) ([]scannedFile, error) {
+type scanWorkspaceResult struct {
+	files                 []scannedFile
+	gitIgnoreSkippedPaths int
+}
+
+type scanWorkspaceStats struct {
+	gitIgnoreSkippedPaths int
+}
+
+func scanWorkspace(ctx context.Context, roots []string, includeDirs []string, maxFiles int, maxFileBytes int64) (scanWorkspaceResult, error) {
 	dirs, err := scanDirectories(roots, includeDirs)
 	if err != nil {
-		return nil, err
+		return scanWorkspaceResult{}, err
 	}
 	allowedRoots, err := canonicalScanRoots(dirs)
 	if err != nil {
-		return nil, err
+		return scanWorkspaceResult{}, err
 	}
 
 	out := make([]scannedFile, 0, 16)
 	seen := make(map[DocumentKey]struct{})
+	stats := scanWorkspaceStats{}
 	for _, dir := range dirs {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return scanWorkspaceResult{}, err
 		}
 
 		info, err := os.Stat(dir)
@@ -41,7 +51,7 @@ func scanWorkspace(ctx context.Context, roots []string, includeDirs []string, ma
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("stat %s: %w", dir, err)
+			return scanWorkspaceResult{}, fmt.Errorf("stat %s: %w", dir, err)
 		}
 		if !info.IsDir() {
 			continue
@@ -50,7 +60,7 @@ func scanWorkspace(ctx context.Context, roots []string, includeDirs []string, ma
 		matchersByDir := make(map[string][]*gitIgnoreMatcher)
 		rootMatchers, err := gitIgnoreMatchersForDir(dir, nil)
 		if err != nil {
-			return nil, err
+			return scanWorkspaceResult{}, err
 		}
 		matchersByDir[dir] = rootMatchers
 
@@ -62,12 +72,12 @@ func scanWorkspace(ctx context.Context, roots []string, includeDirs []string, ma
 				return err
 			}
 			if d.IsDir() {
-				return walkWorkspaceDir(path, dir, d.Name(), matchersByDir)
+				return walkWorkspaceDir(path, dir, d.Name(), matchersByDir, &stats)
 			}
-			return walkWorkspaceFile(path, d, matchersByDir, allowedRoots, seen, &out, maxFiles, maxFileBytes)
+			return walkWorkspaceFile(path, d, matchersByDir, allowedRoots, seen, &out, maxFiles, maxFileBytes, &stats)
 		})
 		if err != nil {
-			return nil, err
+			return scanWorkspaceResult{}, err
 		}
 	}
 
@@ -81,7 +91,10 @@ func scanWorkspace(ctx context.Context, roots []string, includeDirs []string, ma
 			return 0
 		}
 	})
-	return out, nil
+	return scanWorkspaceResult{
+		files:                 out,
+		gitIgnoreSkippedPaths: stats.gitIgnoreSkippedPaths,
+	}, nil
 }
 
 func scanDirectories(roots []string, includeDirs []string) ([]string, error) {
@@ -169,7 +182,7 @@ func pathWithinRoot(path string, root string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-func walkWorkspaceDir(path string, root string, name string, matchersByDir map[string][]*gitIgnoreMatcher) error {
+func walkWorkspaceDir(path string, root string, name string, matchersByDir map[string][]*gitIgnoreMatcher, stats *scanWorkspaceStats) error {
 	if path != root && isIgnoredWorkspaceDir(name) {
 		return filepath.SkipDir
 	}
@@ -183,6 +196,9 @@ func walkWorkspaceDir(path string, root string, name string, matchersByDir map[s
 		return err
 	}
 	if ignored {
+		if stats != nil {
+			stats.gitIgnoreSkippedPaths++
+		}
 		return filepath.SkipDir
 	}
 
@@ -190,12 +206,18 @@ func walkWorkspaceDir(path string, root string, name string, matchersByDir map[s
 	return err
 }
 
-func walkWorkspaceFile(path string, d os.DirEntry, matchersByDir map[string][]*gitIgnoreMatcher, allowedRoots []string, seen map[DocumentKey]struct{}, out *[]scannedFile, maxFiles int, maxFileBytes int64) error {
+func walkWorkspaceFile(path string, d os.DirEntry, matchersByDir map[string][]*gitIgnoreMatcher, allowedRoots []string, seen map[DocumentKey]struct{}, out *[]scannedFile, maxFiles int, maxFileBytes int64, stats *scanWorkspaceStats) error {
 	ignored, err := matchesGitIgnore(matchersByDir[filepath.Dir(path)], path, false)
 	if err != nil {
 		return err
 	}
-	if ignored || filepath.Ext(d.Name()) != ".thrift" {
+	if ignored {
+		if stats != nil {
+			stats.gitIgnoreSkippedPaths++
+		}
+		return nil
+	}
+	if filepath.Ext(d.Name()) != ".thrift" {
 		return nil
 	}
 	if len(*out) >= maxFiles {

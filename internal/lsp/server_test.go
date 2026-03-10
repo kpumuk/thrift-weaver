@@ -53,6 +53,31 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	}
 }
 
+func TestServerWorkspaceIndexHooksUseDiscoveryQueueDepth(t *testing.T) {
+	t.Parallel()
+
+	s := NewServer()
+	s.setWorkspaceHooksForTesting(index.Hooks{
+		OnEvent: func(index.Event) {},
+	})
+
+	if hooks := s.workspaceIndexHooks(); hooks.OnEvent == nil {
+		t.Fatal("expected workspace index hooks to preserve OnEvent")
+	}
+
+	s.workspaceDiscoveryMu.Lock()
+	s.workspaceDiscoveryQueued = true
+	s.workspaceDiscoveryMu.Unlock()
+
+	if hooks := s.workspaceIndexHooks(); hooks.QueueDepth == nil || hooks.QueueDepth() != 1 {
+		got := 0
+		if hooks.QueueDepth != nil {
+			got = hooks.QueueDepth()
+		}
+		t.Fatalf("workspaceIndexHooks queue depth=%d, want 1", got)
+	}
+}
+
 func TestServerRunInitializeShutdownExit(t *testing.T) {
 	t.Parallel()
 

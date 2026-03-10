@@ -101,8 +101,62 @@ func BenchmarkRenamePlan(b *testing.B) {
 	}
 }
 
-func BenchmarkInitialWorkspaceScan(b *testing.B) {
-	root := b.TempDir()
+func BenchmarkFirstOpenClosurePublication(b *testing.B) {
+	root, mainPath, mainSource := benchmarkLazyDiscoveryWorkspace(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		manager := benchmarkLazyDiscoveryManager(b, root, mainPath, mainSource)
+		snap := mustSnapshotForBenchmark(b, manager)
+		if snap.DiscoveryComplete {
+			manager.Close()
+			b.Fatal("expected first-open closure snapshot to stay discovery-incomplete")
+		}
+		if len(snap.Documents) != 2 {
+			manager.Close()
+			b.Fatalf("first-open closure indexed %d documents, want 2", len(snap.Documents))
+		}
+		manager.Close()
+	}
+}
+
+func BenchmarkBackgroundDiscoveryWidening(b *testing.B) {
+	root, mainPath, mainSource := benchmarkLazyDiscoveryWorkspace(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		manager := benchmarkLazyDiscoveryManager(b, root, mainPath, mainSource)
+		if err := manager.RescanWorkspaceWithReason(context.Background(), RebuildReasonManualRescan); err != nil {
+			manager.Close()
+			b.Fatalf("RescanWorkspaceWithReason: %v", err)
+		}
+		snap := mustSnapshotForBenchmark(b, manager)
+		if !snap.DiscoveryComplete {
+			manager.Close()
+			b.Fatal("expected background discovery to complete after workspace rescan")
+		}
+		if len(snap.Documents) != 252 {
+			manager.Close()
+			b.Fatalf("background discovery indexed %d documents, want 252", len(snap.Documents))
+		}
+		manager.Close()
+	}
+}
+
+func benchmarkLazyDiscoveryWorkspace(b testing.TB) (root string, mainPath string, mainSource []byte) {
+	b.Helper()
+	root = b.TempDir()
+	mainPath = filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainSource = []byte("include \"shared.thrift\"\n\nstruct Holder {\n  1: shared.User user,\n}\n")
+	if err := os.WriteFile(mainPath, mainSource, 0o600); err != nil {
+		b.Fatalf("WriteFile(%s): %v", mainPath, err)
+	}
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		b.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
 	for i := range 250 {
 		path := filepath.Join(root, fmt.Sprintf("file-%03d.thrift", i))
 		src := fmt.Sprintf("struct Type%03d {\n  1: string name,\n}\n", i)
@@ -110,18 +164,27 @@ func BenchmarkInitialWorkspaceScan(b *testing.B) {
 			b.Fatalf("WriteFile(%s): %v", path, err)
 		}
 	}
+	return root, mainPath, mainSource
+}
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		manager := NewManager(Options{WorkspaceRoots: []string{root}})
-		manager.setRescanIntervalForTesting(time.Hour)
-		if err := manager.RescanWorkspace(context.Background()); err != nil {
-			manager.Close()
-			b.Fatalf("RescanWorkspace: %v", err)
-		}
+func benchmarkLazyDiscoveryManager(tb testing.TB, root string, mainPath string, mainSource []byte) *Manager {
+	tb.Helper()
+	manager := NewManager(Options{WorkspaceRoots: []string{root}})
+	manager.setRescanIntervalForTesting(time.Hour)
+	if err := manager.UpsertOpenDocumentWithReason(context.Background(), DocumentInput{
+		URI:        mainPath,
+		Version:    1,
+		Generation: 1,
+		Source:     mainSource,
+	}, RebuildReasonOpen); err != nil {
 		manager.Close()
+		tb.Fatalf("UpsertOpenDocumentWithReason: %v", err)
 	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(context.Background(), RebuildReasonOpen); err != nil {
+		manager.Close()
+		tb.Fatalf("RefreshOpenDocumentClosureWithReason: %v", err)
+	}
+	return manager
 }
 
 func benchmarkQuerySetup(b testing.TB, fixture, relPath, needle string) (*Manager, QueryDocument, text.UTF16Position) {

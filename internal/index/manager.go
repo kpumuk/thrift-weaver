@@ -133,6 +133,7 @@ type Manager struct {
 	maxFiles    int
 	maxFileSize int64
 	onEvent     func(Event)
+	queueDepth  func() int
 
 	slots map[DocumentKey]*documentSlot
 
@@ -163,6 +164,7 @@ func NewManager(opts Options) *Manager {
 		maxFiles:    maxFiles,
 		maxFileSize: maxFileSize,
 		onEvent:     opts.Hooks.OnEvent,
+		queueDepth:  opts.Hooks.QueueDepth,
 		slots:       make(map[DocumentKey]*documentSlot),
 		rescanReset: make(chan struct{}, 1),
 		closeCh:     make(chan struct{}),
@@ -210,7 +212,7 @@ func (m *Manager) UpsertOpenDocumentWithReason(ctx context.Context, in DocumentI
 	slot := m.ensureSlotLocked(key, displayURI)
 	hadActive := slot.active() != nil
 	slot.open = &documentState{input: in, summary: summary}
-	m.publishLocked([]DocumentKey{key}, !hadActive, reason, time.Since(start), 0, m.discoveryCompleteLocked())
+	m.publishLocked([]DocumentKey{key}, !hadActive, reason, time.Since(start), rebuildStats{}, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -245,7 +247,7 @@ func (m *Manager) CloseOpenDocumentWithReason(ctx context.Context, uri string, r
 	if !hasActive {
 		delete(m.slots, key)
 	}
-	m.publishLocked([]DocumentKey{key}, hadActive != hasActive, reason, time.Since(start), 0, m.discoveryCompleteLocked())
+	m.publishLocked([]DocumentKey{key}, hadActive != hasActive, reason, time.Since(start), rebuildStats{}, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -260,16 +262,16 @@ func (m *Manager) RescanWorkspaceWithReason(ctx context.Context, reason RebuildR
 		return errors.New("nil Manager")
 	}
 	start := time.Now()
-	files, err := scanWorkspace(ctx, m.roots, m.includeDirs, m.maxFiles, m.maxFileSize)
+	result, err := scanWorkspace(ctx, m.roots, m.includeDirs, m.maxFiles, m.maxFileSize)
 	if err != nil {
 		return err
 	}
 	scanDuration := time.Since(start)
 
-	next := make(map[DocumentKey]loadedDiskState, len(files))
+	next := make(map[DocumentKey]loadedDiskState, len(result.files))
 	cached := m.cachedDiskStates()
 
-	for _, file := range files {
+	for _, file := range result.files {
 		if state, ok := cached[file.Key]; ok && sameScannedFileMetadata(state.file, file) {
 			next[file.Key] = state
 			continue
@@ -294,7 +296,10 @@ func (m *Manager) RescanWorkspaceWithReason(ctx context.Context, reason RebuildR
 	if len(changed) == 0 && snapshot != nil && snapshot.DiscoveryComplete {
 		return nil
 	}
-	m.publishLocked(changed, fullRebuild || snapshot == nil, reason, scanDuration, len(files), true)
+	m.publishLocked(changed, fullRebuild || snapshot == nil, reason, scanDuration, rebuildStats{
+		discoveredFiles:       len(result.files),
+		gitIgnoreSkippedPaths: result.gitIgnoreSkippedPaths,
+	}, true)
 	return nil
 }
 
@@ -325,7 +330,9 @@ func (m *Manager) RefreshOpenDocumentClosureWithReason(ctx context.Context, reas
 	if len(changed) == 0 && m.snapshot.Load() != nil && wasDiscoveryComplete == m.discoveryCompleteLocked() {
 		return nil
 	}
-	m.publishLocked(changed, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), len(loaded), m.discoveryCompleteLocked())
+	m.publishLocked(changed, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), rebuildStats{
+		directLoads: len(loaded),
+	}, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -359,7 +366,9 @@ func (m *Manager) RefreshDocumentWithReason(ctx context.Context, uri string, del
 		if slot.open != nil {
 			return nil
 		}
-		m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), 1, m.discoveryCompleteLocked())
+		m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), rebuildStats{
+			discoveredFiles: 1,
+		}, m.discoveryCompleteLocked())
 		return nil
 	}
 
@@ -374,7 +383,9 @@ func (m *Manager) RefreshDocumentWithReason(ctx context.Context, uri string, del
 		if slot.open != nil {
 			return nil
 		}
-		m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), 1, m.discoveryCompleteLocked())
+		m.publishLocked([]DocumentKey{key}, false, reason, time.Since(start), rebuildStats{
+			discoveredFiles: 1,
+		}, m.discoveryCompleteLocked())
 		return nil
 	}
 	if info.IsDir() {
@@ -407,7 +418,9 @@ func (m *Manager) RefreshDocumentWithReason(ctx context.Context, uri string, del
 		return nil
 	}
 	fullRebuild := !before.present || !after.present
-	m.publishLocked([]DocumentKey{key}, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), 1, m.discoveryCompleteLocked())
+	m.publishLocked([]DocumentKey{key}, fullRebuild || m.snapshot.Load() == nil, reason, time.Since(start), rebuildStats{
+		discoveredFiles: 1,
+	}, m.discoveryCompleteLocked())
 	return nil
 }
 
@@ -677,7 +690,13 @@ func documentPathOrEmpty(uri string) string {
 	return path
 }
 
-func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason RebuildReason, duration time.Duration, discoveredFiles int, discoveryComplete bool) {
+type rebuildStats struct {
+	directLoads           int
+	discoveredFiles       int
+	gitIgnoreSkippedPaths int
+}
+
+func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason RebuildReason, duration time.Duration, stats rebuildStats, discoveryComplete bool) {
 	prev := m.snapshot.Load()
 	baseDocs := make(map[DocumentKey]*DocumentSummary, len(m.slots))
 	for key, slot := range m.slots {
@@ -698,19 +717,40 @@ func (m *Manager) publishLocked(changed []DocumentKey, fullRebuild bool, reason 
 	}, discoveryComplete)
 	m.snapshot.Store(next)
 	scanDuration := time.Duration(0)
-	if discoveredFiles > 0 {
+	if stats.discoveredFiles > 0 {
 		scanDuration = duration
 	}
+	directDocuments, opportunisticDocuments := m.sourceCountsLocked()
 	m.emit(Event{
-		Kind:                EventKindRebuild,
-		Reason:              reason,
-		Duration:            duration,
-		ScanDuration:        scanDuration,
-		DiscoveredFiles:     discoveredFiles,
-		IndexedDocuments:    len(next.Documents),
-		ImpactedDocuments:   impactedCount,
-		WorkspaceGeneration: next.Generation,
+		Kind:                   EventKindRebuild,
+		Reason:                 reason,
+		Duration:               duration,
+		ScanDuration:           scanDuration,
+		DirectLoads:            stats.directLoads,
+		DiscoveredFiles:        stats.discoveredFiles,
+		GitIgnoreSkippedPaths:  stats.gitIgnoreSkippedPaths,
+		IndexedDocuments:       len(next.Documents),
+		DirectDocuments:        directDocuments,
+		OpportunisticDocuments: opportunisticDocuments,
+		ImpactedDocuments:      impactedCount,
+		WorkspaceGeneration:    next.Generation,
+		DiscoveryComplete:      next.DiscoveryComplete,
 	})
+}
+
+func (m *Manager) sourceCountsLocked() (direct int, opportunistic int) {
+	for _, slot := range m.slots {
+		if slot == nil || slot.active() == nil {
+			continue
+		}
+		if slot.hasSource(diskSourceDirect) {
+			direct++
+		}
+		if slot.hasSource(diskSourceOpportunistic) {
+			opportunistic++
+		}
+	}
+	return direct, opportunistic
 }
 
 func buildSnapshot(prev *WorkspaceSnapshot, baseDocs map[DocumentKey]*DocumentSummary, changed []DocumentKey, fullRebuild bool, cfg resolverConfig, discoveryComplete bool) *WorkspaceSnapshot {
@@ -1006,6 +1046,9 @@ func pathWithin(path, root string) bool {
 func (m *Manager) emit(event Event) {
 	if m == nil || m.onEvent == nil {
 		return
+	}
+	if m.queueDepth != nil {
+		event.BackgroundQueueDepth = m.queueDepth()
 	}
 	if len(event.RenameBlockers) != 0 {
 		event.RenameBlockers = maps.Clone(event.RenameBlockers)

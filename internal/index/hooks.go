@@ -34,19 +34,26 @@ const (
 
 // Event is a structured observability hook payload for workspace indexing.
 type Event struct {
-	Kind                EventKind
-	Reason              RebuildReason
-	Method              string
-	Duration            time.Duration
-	ScanDuration        time.Duration
-	DiscoveredFiles     int
-	IndexedDocuments    int
-	ImpactedDocuments   int
-	WorkspaceGeneration uint64
-	RenameBlockers      map[string]int
+	Kind                   EventKind
+	Reason                 RebuildReason
+	Method                 string
+	Duration               time.Duration
+	ScanDuration           time.Duration
+	DirectLoads            int
+	DiscoveredFiles        int
+	GitIgnoreSkippedPaths  int
+	IndexedDocuments       int
+	DirectDocuments        int
+	OpportunisticDocuments int
+	ImpactedDocuments      int
+	WorkspaceGeneration    uint64
+	DiscoveryComplete      bool
+	BackgroundQueueDepth   int
+	RenameBlockers         map[string]int
 }
 
 // Hooks configures structured observability callbacks for workspace indexing.
 type Hooks struct {
-	OnEvent func(Event)
+	OnEvent    func(Event)
+	QueueDepth func() int
 }

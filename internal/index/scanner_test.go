@@ -26,10 +26,11 @@ func TestScanWorkspaceIgnoresMetadataDirsAndRespectsLimits(t *testing.T) {
 		t.Fatalf("WriteFile two: %v", err)
 	}
 
-	files, err := scanWorkspace(context.Background(), []string{root}, nil, 10, 1<<20)
+	result, err := scanWorkspace(context.Background(), []string{root}, nil, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("scanWorkspace: %v", err)
 	}
+	files := result.files
 	if len(files) != 2 {
 		t.Fatalf("len(files)=%d, want 2", len(files))
 	}
@@ -97,10 +98,11 @@ func TestScanWorkspaceRespectsRecursiveGitIgnore(t *testing.T) {
 		t.Fatalf("WriteFile keep: %v", err)
 	}
 
-	files, err := scanWorkspace(context.Background(), []string{root}, nil, 10, 1<<20)
+	result, err := scanWorkspace(context.Background(), []string{root}, nil, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("scanWorkspace: %v", err)
 	}
+	files := result.files
 
 	normalizedRoot, err := normalizeRuntimePath(root)
 	if err != nil {
@@ -118,5 +120,8 @@ func TestScanWorkspaceRespectsRecursiveGitIgnore(t *testing.T) {
 	want := []string{"main.thrift", "nested/keep.thrift"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("scanned files=%v, want %v", got, want)
+	}
+	if result.gitIgnoreSkippedPaths != 2 {
+		t.Fatalf("gitIgnoreSkippedPaths=%d, want 2", result.gitIgnoreSkippedPaths)
 	}
 }
