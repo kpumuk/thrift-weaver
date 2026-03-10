@@ -198,7 +198,7 @@ Cross-file features share one workspace index instead of re-binding independentl
 - `thriftls` captures the active document snapshot and matching workspace generation before serving definition, references, workspace symbol, prepare-rename, and rename requests.
 - definition can answer from the currently loaded graph as soon as binding is exact; references and rename fail closed until discovery is complete enough to be exact; workspace symbol remains best-effort over the loaded graph.
 - parser diagnostics, local lint diagnostics, and workspace-lint diagnostics are published as independent buckets so stale workspace work cannot clear newer parse results.
-- workspace folder changes, watched file changes, and periodic rescans widen or refresh the workspace index without exposing half-built state to readers.
+- workspace folder changes and watched file changes refresh the workspace index without exposing half-built state to readers; whole-workspace widening is explicit or triggered once from an incomplete open-document session, not by a periodic timer.
 
 ## Key Design Invariants
 

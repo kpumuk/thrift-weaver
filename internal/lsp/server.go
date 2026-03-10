@@ -513,7 +513,6 @@ func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
 		if err := manager.RefreshOpenDocumentClosureWithReason(ctx, index.RebuildReasonClose); err != nil {
 			return err
 		}
-		s.scheduleWorkspaceDiscovery(index.RebuildReasonClose)
 	}
 	return nil
 }
@@ -555,7 +554,6 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, p DidChangeWatchedFi
 			return err
 		}
 	}
-	s.scheduleWorkspaceDiscovery(index.RebuildReasonWatch)
 	s.scheduleWorkspaceLintPublishForAllOpenDocuments()
 	return nil
 }
@@ -682,7 +680,6 @@ func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) 
 	if old != nil {
 		old.Close()
 	}
-	s.scheduleWorkspaceDiscovery(index.RebuildReasonManualRescan)
 	return nil
 }
 
@@ -799,8 +796,29 @@ func (s *Server) syncWorkspaceDocumentWithReason(ctx context.Context, uri string
 	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, reason); err != nil {
 		return err
 	}
-	s.scheduleWorkspaceDiscovery(reason)
+	s.maybeScheduleWorkspaceDiscovery(manager, reason)
 	return nil
+}
+
+func (s *Server) maybeScheduleWorkspaceDiscovery(manager *index.Manager, reason index.RebuildReason) {
+	if !s.shouldScheduleWorkspaceDiscovery(manager, reason) {
+		return
+	}
+	s.scheduleWorkspaceDiscovery(reason)
+}
+
+func (s *Server) shouldScheduleWorkspaceDiscovery(manager *index.Manager, reason index.RebuildReason) bool {
+	if manager == nil {
+		return false
+	}
+	if reason == index.RebuildReasonManualRescan {
+		return true
+	}
+	if reason != index.RebuildReasonOpen {
+		return false
+	}
+	snapshot, ok := manager.Snapshot()
+	return !ok || snapshot == nil || !snapshot.DiscoveryComplete
 }
 
 func (s *Server) scheduleWorkspaceDiscovery(reason index.RebuildReason) {
@@ -854,14 +872,11 @@ func (s *Server) shouldRescanWorkspace(manager *index.Manager, reason index.Rebu
 	if manager == nil {
 		return false
 	}
-	snapshot, ok := manager.Snapshot()
-	if !ok || snapshot == nil {
-		return false
-	}
-	if !snapshot.DiscoveryComplete {
+	if reason == index.RebuildReasonManualRescan {
 		return true
 	}
-	return reason == index.RebuildReasonWatch || reason == index.RebuildReasonManualRescan
+	snapshot, ok := manager.Snapshot()
+	return ok && snapshot != nil && !snapshot.DiscoveryComplete
 }
 
 func (s *Server) workspaceDiscoveryQueueDepth() int {

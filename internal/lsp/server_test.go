@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -75,6 +76,145 @@ func TestServerWorkspaceIndexHooksUseDiscoveryQueueDepth(t *testing.T) {
 			got = hooks.QueueDepth()
 		}
 		t.Fatalf("workspaceIndexHooks queue depth=%d, want 1", got)
+	}
+}
+
+func TestInitializeDoesNotAutoDiscoverWorkspaceWithoutOpenDocuments(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+
+	var (
+		mu     sync.Mutex
+		events []index.Event
+	)
+
+	s := NewServer()
+	s.setWorkspaceHooksForTesting(index.Hooks{
+		OnEvent: func(event index.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		},
+	})
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	manager := s.workspaceManager()
+	if manager == nil {
+		t.Fatal("expected workspace manager")
+	}
+	snap, ok := manager.Snapshot()
+	if !ok || snap == nil {
+		t.Fatal("expected workspace snapshot")
+	}
+	if len(snap.Documents) != 0 {
+		t.Fatalf("initialized snapshot indexed %d documents, want 0", len(snap.Documents))
+	}
+	if snap.DiscoveryComplete {
+		t.Fatal("initialized snapshot should remain discovery-incomplete without open documents")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	snap, ok = manager.Snapshot()
+	if !ok || snap == nil {
+		t.Fatal("expected workspace snapshot after wait")
+	}
+	if len(snap.Documents) != 0 {
+		t.Fatalf("post-wait snapshot indexed %d documents, want 0", len(snap.Documents))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events {
+		if event.Kind == index.EventKindRebuild && event.IndexedDocuments > 0 {
+			t.Fatalf("unexpected automatic workspace discovery event: %+v", event)
+		}
+	}
+}
+
+func TestDidChangeWatchedFilesDoesNotTriggerWholeWorkspaceRescan(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	typesPath := filepath.Join(root, "types.thrift")
+	typesURI := mustCanonicalURI(t, typesPath)
+	typesSource := testutil.ReadFile(t, typesPath)
+
+	var (
+		mu     sync.Mutex
+		events []index.Event
+	)
+
+	s := NewServer()
+	s.setWorkspaceHooksForTesting(index.Hooks{
+		OnEvent: func(event index.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		},
+	})
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+
+	manager := s.workspaceManager()
+	if manager == nil {
+		t.Fatal("expected workspace manager")
+	}
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+	waitForWorkspaceDiscoveryIdle(t, s)
+
+	mu.Lock()
+	events = nil
+	mu.Unlock()
+
+	updatedTypes := append(append([]byte(nil), typesSource...), '\n')
+	if err := os.WriteFile(typesPath, updatedTypes, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", typesPath, err)
+	}
+
+	if err := s.DidChangeWatchedFiles(context.Background(), DidChangeWatchedFilesParams{
+		Changes: []FileEvent{{
+			URI:  typesURI,
+			Type: FileChangeTypeChanged,
+		}},
+	}); err != nil {
+		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	watchRebuilds := 0
+	for _, event := range events {
+		if event.Kind == index.EventKindRebuild && event.Reason == index.RebuildReasonWatch {
+			watchRebuilds++
+		}
+	}
+	if watchRebuilds != 1 {
+		t.Fatalf("watch rebuild count=%d, want 1; events=%+v", watchRebuilds, events)
 	}
 }
 
@@ -2288,6 +2428,23 @@ func responseByID(t *testing.T, msgs []testFrame, id string) Response {
 	}
 	t.Fatalf("response id=%s not found", id)
 	return Response{}
+}
+
+func waitForWorkspaceDiscoveryIdle(t *testing.T, s *Server) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.workspaceDiscoveryMu.Lock()
+		running := s.workspaceDiscoveryRunning
+		queued := s.workspaceDiscoveryQueued
+		s.workspaceDiscoveryMu.Unlock()
+		if !running && !queued {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("workspace discovery did not quiesce")
 }
 
 func findDocumentSymbol(in []DocumentSymbol, name string) *DocumentSymbol {

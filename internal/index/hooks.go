@@ -26,8 +26,6 @@ const (
 	RebuildReasonClose RebuildReason = "close"
 	// RebuildReasonWatch marks a rebuild caused by filesystem watcher events.
 	RebuildReasonWatch RebuildReason = "watch"
-	// RebuildReasonPeriodic marks a rebuild caused by the periodic rescan loop.
-	RebuildReasonPeriodic RebuildReason = "periodic"
 	// RebuildReasonManualRescan marks a rebuild caused by an explicit rescan request.
 	RebuildReasonManualRescan RebuildReason = "manual-rescan"
 )

@@ -483,7 +483,7 @@ Rules:
   - reverse dependents already discovered through include edges
 - undiscovered reverse dependents do not participate in invalidation until opportunistic discovery reaches them
 - invalidation is graph-based over the loaded subgraph, not whole-workspace by default
-- the manager may schedule debounced background discovery/rescan work for filesystem drift
+- the manager may schedule bounded background discovery widening after direct open-document loads, but it must not rely on periodic whole-workspace rescans by default
 
 LSP queries must reject stale document versions with `ContentModified` when the caller's document version is older than the active open-document override.
 
@@ -506,10 +506,11 @@ Workspace root rules:
 
 Fallback consistency strategy:
 
-- when workspace features are enabled, the manager performs a periodic metadata rescan of already loaded documents every 30 seconds
-- watcher overflow/error events trigger an immediate debounced background discovery restart or full rescan, but do not block the request path
 - opening a document schedules direct-load work for the containing document and its transitive includes immediately
-- periodic rescans compare path, size, and modification time before reparsing to cap steady-state cost
+- `didOpen` may enqueue one background workspace-discovery widening pass while the workspace snapshot is still incomplete
+- repeated `didChange`, `didSave`, and `didClose` events refresh the active open-document closure but must not trigger whole-workspace discovery by default
+- `workspace/didChangeWatchedFiles` refreshes the affected loaded URIs and must not trigger a whole-workspace rescan by default
+- explicit/manual rescans remain available for callers that want discovery-complete workspace coverage
 - opportunistic discovery skips `.git`, `.hg`, `.svn`, `.idea`, `.vscode`, and paths ignored by recursive `.gitignore` rules
 
 ### 9. Failure and Partial-State Policy
@@ -705,7 +706,7 @@ Protocol rules:
 - `textDocument/references` and `textDocument/rename` may return `RequestFailed` with an explicit "workspace discovery incomplete" reason until exact coverage is available
 - `workspace/symbol` searches the currently loaded graph and may widen results as opportunistic discovery progresses
 - stale, incomplete, or blocked rename operations return `RequestFailed` with a concrete reason
-- `workspace/didChangeWatchedFiles` events trigger targeted rescans for affected loaded URIs and may enqueue further background discovery work
+- `workspace/didChangeWatchedFiles` events refresh affected loaded URIs without triggering whole-workspace discovery by default
 - workspace-wide discovery may use a bounded parse worker pool; each worker owns one reusable parser instance and parses files sequentially within that worker
 - `thriftls` may expose the workspace parse worker count as startup configuration; editor clients may surface that as a first-class setting
 
@@ -742,7 +743,7 @@ Targets for a warm local session:
 - first-open background publication for one active document plus <=20 reachable includes: p95 <500 ms without delaying the LSP response
 - explicit workspace discovery of 1,000 thrift files / 50 MB total source: p95 <5 s on reference hardware
 
-The manager must avoid unbounded memory growth across repeated open/change/close cycles and repeated rescans.
+The manager must avoid unbounded memory growth across repeated open/change/close cycles and explicit rescans.
 
 Worker-pool policy:
 

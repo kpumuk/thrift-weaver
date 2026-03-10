@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	defaultMaxFiles       = 10000
-	defaultMaxFileBytes   = 2 << 20
-	defaultRescanInterval = 30 * time.Second
+	defaultMaxFiles     = 10000
+	defaultMaxFileBytes = 2 << 20
 )
 
 type documentState struct {
@@ -141,14 +140,9 @@ type Manager struct {
 	slots map[DocumentKey]*documentSlot
 
 	snapshot atomic.Pointer[WorkspaceSnapshot]
-
-	rescanInterval atomic.Int64
-	rescanReset    chan struct{}
-	closeCh        chan struct{}
-	closeOnce      sync.Once
 }
 
-// NewManager constructs a workspace manager and starts periodic metadata rescans.
+// NewManager constructs a workspace manager.
 func NewManager(opts Options) *Manager {
 	roots := normalizeRootPaths(opts.WorkspaceRoots)
 	includeDirs := normalizeIncludeDirs(opts.IncludeDirs)
@@ -171,11 +165,7 @@ func NewManager(opts Options) *Manager {
 		onEvent:      opts.Hooks.OnEvent,
 		queueDepth:   opts.Hooks.QueueDepth,
 		slots:        make(map[DocumentKey]*documentSlot),
-		rescanReset:  make(chan struct{}, 1),
-		closeCh:      make(chan struct{}),
 	}
-	m.rescanInterval.Store(int64(defaultRescanInterval))
-	go m.rescanLoop()
 	return m
 }
 
@@ -186,14 +176,9 @@ func normalizeParseWorkers(workers int) int {
 	return min(max(runtime.GOMAXPROCS(0), 1), 4)
 }
 
-// Close stops the background rescan loop.
+// Close releases manager resources.
 func (m *Manager) Close() {
-	if m == nil {
-		return
-	}
-	m.closeOnce.Do(func() {
-		close(m.closeCh)
-	})
+	_ = m
 }
 
 // UpsertOpenDocument reparses and stores the active open-document shadow.
@@ -931,53 +916,11 @@ func normalizeIncludeDirs(in []string) []string {
 	return out
 }
 
-func (m *Manager) rescanLoop() {
-	timer := time.NewTimer(defaultRescanInterval)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-m.closeCh:
-			return
-		case <-m.rescanReset:
-		case <-timer.C:
-			snapshot := m.snapshot.Load()
-			switch {
-			case snapshot == nil:
-			case snapshot.DiscoveryComplete:
-				_ = m.RescanWorkspaceWithReason(context.Background(), RebuildReasonPeriodic)
-			default:
-				_ = m.RefreshOpenDocumentClosureWithReason(context.Background(), RebuildReasonPeriodic)
-				_ = m.RescanWorkspaceWithReason(context.Background(), RebuildReasonPeriodic)
-			}
-		}
-
-		interval := time.Duration(m.rescanInterval.Load())
-		if interval <= 0 {
-			interval = defaultRescanInterval
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(interval)
-	}
-}
-
+// setRescanIntervalForTesting is a no-op compatibility hook retained for tests
+// that previously disabled periodic rescans.
 func (m *Manager) setRescanIntervalForTesting(d time.Duration) {
-	if m == nil {
-		return
-	}
-	if d <= 0 {
-		d = defaultRescanInterval
-	}
-	m.rescanInterval.Store(int64(d))
-	select {
-	case m.rescanReset <- struct{}{}:
-	default:
-	}
+	_ = m
+	_ = d
 }
 
 func (m *Manager) pathAllowed(path string) bool {
