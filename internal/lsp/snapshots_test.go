@@ -3,9 +3,12 @@ package lsp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 )
 
@@ -160,5 +163,68 @@ func TestServerDidOpenDidChangeDidCloseLifecycle(t *testing.T) {
 	}
 	if _, ok := s.Store().Snapshot(uri); ok {
 		t.Fatal("expected document closed")
+	}
+}
+
+func TestSnapshotStoreAndServerCanonicalizeURIVariants(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "with space")
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	canonicalPath := filepath.Join(root, "demo.thrift")
+	rawURI := "file://" + filepath.ToSlash(root) + "/nested/../demo.thrift"
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatalf("MkdirAll nested: %v", err)
+	}
+
+	canonicalURI, _, err := index.CanonicalizeDocumentURI(canonicalPath)
+	if err != nil {
+		t.Fatalf("CanonicalizeDocumentURI: %v", err)
+	}
+
+	store := NewSnapshotStore()
+	if _, err := store.Open(context.Background(), rawURI, 1, []byte("struct S {\n  1: string a\n}\n")); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, ok := store.Snapshot(canonicalURI); !ok {
+		t.Fatal("expected canonical snapshot lookup to succeed")
+	}
+	if _, err := store.Change(context.Background(), canonicalURI, 2, []TextDocumentContentChangeEvent{{Text: "struct S {\n  1: string b\n}\n"}}); err != nil {
+		t.Fatalf("Change: %v", err)
+	}
+	if snap, ok := store.Snapshot(rawURI); !ok || !strings.Contains(string(snap.Tree.Source), "string b") {
+		t.Fatalf("raw URI lookup failed after canonical change: ok=%v snap=%v", ok, snap)
+	}
+	store.Close(rawURI)
+	if _, ok := store.Snapshot(canonicalURI); ok {
+		t.Fatal("expected canonical snapshot removed after raw close")
+	}
+
+	s := NewServer()
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: rawURI, Version: 1, Text: "struct S {\n  1: string a\n}\n"},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	if err := s.DidChange(context.Background(), DidChangeParams{
+		TextDocument: VersionedTextDocumentIdentifier{URI: canonicalURI, Version: 2},
+		ContentChanges: []TextDocumentContentChangeEvent{{
+			Text: "struct S {\n  1: string c\n}\n",
+		}},
+	}); err != nil {
+		t.Fatalf("DidChange: %v", err)
+	}
+	if snap, ok := s.Store().Snapshot(rawURI); !ok || !strings.Contains(string(snap.Tree.Source), "string c") {
+		t.Fatalf("server snapshot after canonical change: ok=%v snap=%v", ok, snap)
+	}
+	if err := s.DidClose(context.Background(), DidCloseParams{
+		TextDocument: TextDocumentIdentifier{URI: rawURI},
+	}); err != nil {
+		t.Fatalf("DidClose: %v", err)
+	}
+	if _, ok := s.Store().Snapshot(canonicalURI); ok {
+		t.Fatal("expected canonical snapshot removed after raw DidClose")
 	}
 }

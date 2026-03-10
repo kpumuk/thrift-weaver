@@ -4,6 +4,7 @@ package testutil
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -99,4 +100,70 @@ func ReadFile(t testing.TB, path string) []byte {
 		t.Fatalf("ReadFile(%s): %v", path, err)
 	}
 	return b
+}
+
+// WorkspaceFixturePath returns the root directory for a named testdata/index workspace fixture.
+func WorkspaceFixturePath(t testing.TB, name string) string {
+	t.Helper()
+	root := MustRepoRoot(t)
+	path := filepath.Join(root, "testdata", "index", name)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("WorkspaceFixturePath(%s): %v", name, err)
+	}
+	return path
+}
+
+// CopyWorkspaceFixture copies a named testdata/index workspace fixture into a temp dir and returns that path.
+func CopyWorkspaceFixture(t testing.TB, name string) string {
+	t.Helper()
+
+	srcRoot := WorkspaceFixturePath(t, name)
+	dstRoot := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dstRoot, 0o750); err != nil {
+		t.Fatalf("CopyWorkspaceFixture(%s): mkdir %s: %v", name, dstRoot, err)
+	}
+	if err := copyDir(srcRoot, dstRoot); err != nil {
+		t.Fatalf("CopyWorkspaceFixture(%s): %v", name, err)
+	}
+	return dstRoot
+}
+
+func copyDir(srcRoot, dstRoot string) error {
+	return filepath.WalkDir(srcRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(srcRoot, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		dstPath := filepath.Join(dstRoot, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dstPath, 0o750)
+		}
+		return copyFile(path, dstPath)
+	})
+}
+
+func copyFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", srcPath, err)
+	}
+	defer func() { _ = src.Close() }()
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dstPath, err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("copy %s -> %s: %w", srcPath, dstPath, err)
+	}
+	return nil
 }

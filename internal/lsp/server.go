@@ -13,6 +13,7 @@ import (
 	"time"
 
 	fmtengine "github.com/kpumuk/thrift-weaver/internal/format"
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/lint"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
@@ -335,21 +336,21 @@ func (s *Server) Exit() {
 
 // DidOpen parses and stores the opened document snapshot.
 func (s *Server) DidOpen(ctx context.Context, p DidOpenParams) error {
-	store, err := s.requireStore()
+	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
 	}
-	_, err = store.Open(ctx, p.TextDocument.URI, p.TextDocument.Version, []byte(p.TextDocument.Text))
+	_, err = store.Open(ctx, uri, p.TextDocument.Version, []byte(p.TextDocument.Text))
 	return err
 }
 
 // DidChange applies text changes and stores the reparsed snapshot.
 func (s *Server) DidChange(ctx context.Context, p DidChangeParams) error {
-	store, err := s.requireStore()
+	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
 	}
-	_, err = store.Change(ctx, p.TextDocument.URI, p.TextDocument.Version, p.ContentChanges)
+	_, err = store.Change(ctx, uri, p.TextDocument.Version, p.ContentChanges)
 	return err
 }
 
@@ -363,11 +364,11 @@ func (s *Server) DidSave(ctx context.Context, p DidSaveParams) error {
 // DidClose removes the document snapshot if present.
 func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
 	_ = ctx
-	store, err := s.requireStore()
+	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
 	}
-	store.Close(p.TextDocument.URI)
+	store.Close(uri)
 	return nil
 }
 
@@ -434,6 +435,18 @@ func (s *Server) requireStore() (*SnapshotStore, error) {
 	return s.store, nil
 }
 
+func (s *Server) storeForDocumentURI(raw string) (*SnapshotStore, string, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, "", err
+	}
+	uri, err := canonicalDocumentURI(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	return store, uri, nil
+}
+
 func (s *Server) latestSnapshot(uri string) (*Snapshot, error) {
 	store, err := s.requireStore()
 	if err != nil {
@@ -470,7 +483,7 @@ func (s *Server) publishDiagnosticsForURI(ctx context.Context, uri string) error
 	if err != nil {
 		return err
 	}
-	return s.writeVersionedDiagnostics(uri, snap.Version, snap.Generation, diags)
+	return s.writeVersionedDiagnostics(snap.URI, snap.Version, snap.Generation, diags)
 }
 
 func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
@@ -486,7 +499,7 @@ func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
 	if err != nil {
 		return err
 	}
-	return s.writeVersionedDiagnostics(uri, snap.Version, snap.Generation, diags)
+	return s.writeVersionedDiagnostics(snap.URI, snap.Version, snap.Generation, diags)
 }
 
 func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) ([]Diagnostic, error) {
@@ -509,6 +522,10 @@ func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) (
 }
 
 func (s *Server) publishClearedDiagnostics(uri string) error {
+	uri, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return err
+	}
 	return s.writePublishDiagnostics(PublishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: []Diagnostic{},
@@ -541,7 +558,7 @@ func (s *Server) writeVersionedDiagnostics(uri string, version int32, generation
 	}
 
 	return s.writePublishDiagnostics(PublishDiagnosticsParams{
-		URI:         uri,
+		URI:         snap.URI,
 		Version:     &version,
 		Diagnostics: diags,
 	})
@@ -587,8 +604,12 @@ func (s *Server) scheduleLintPublishForURI(uri string) {
 	if s == nil || s.lint == nil || uri == "" {
 		return
 	}
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return
+	}
 
-	snap, err := s.latestSnapshot(uri)
+	snap, err := s.latestSnapshot(canonicalURI)
 	if err != nil || snap == nil {
 		return
 	}
@@ -603,17 +624,17 @@ func (s *Server) scheduleLintPublishForURI(uri string) {
 	ctx, cancel := context.WithCancel(runCtx)
 
 	s.lintMu.Lock()
-	if state := s.lintJobs[uri]; state.cancel != nil {
+	if state := s.lintJobs[canonicalURI]; state.cancel != nil {
 		state.cancel()
 	}
-	s.lintJobs[uri] = lintJobState{version: version, generation: generation, cancel: cancel}
+	s.lintJobs[canonicalURI] = lintJobState{version: version, generation: generation, cancel: cancel}
 	debounce := s.lintDebounce
 	s.lintWG.Add(1)
 	s.lintMu.Unlock()
 
 	go func() {
 		defer s.lintWG.Done()
-		defer s.finishLintJob(uri, version, generation)
+		defer s.finishLintJob(canonicalURI, version, generation)
 
 		timer := time.NewTimer(debounce)
 		defer timer.Stop()
@@ -624,10 +645,10 @@ func (s *Server) scheduleLintPublishForURI(uri string) {
 		case <-timer.C:
 		}
 
-		if !s.isLintJobCurrent(uri, version, generation) {
+		if !s.isLintJobCurrent(canonicalURI, version, generation) {
 			return
 		}
-		_ = s.publishDebouncedLintDiagnostics(ctx, uri, version, generation)
+		_ = s.publishDebouncedLintDiagnostics(ctx, canonicalURI, version, generation)
 	}()
 }
 
@@ -660,14 +681,18 @@ func (s *Server) invalidateLintJob(uri string) {
 	if s == nil || uri == "" {
 		return
 	}
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return
+	}
 
 	s.lintMu.Lock()
 	defer s.lintMu.Unlock()
 
-	if state := s.lintJobs[uri]; state.cancel != nil {
+	if state := s.lintJobs[canonicalURI]; state.cancel != nil {
 		state.cancel()
 	}
-	delete(s.lintJobs, uri)
+	delete(s.lintJobs, canonicalURI)
 }
 
 func (s *Server) finishLintJob(uri string, version int32, generation uint64) {
@@ -700,6 +725,14 @@ func (s *Server) isLintJobCurrent(uri string, version int32, generation uint64) 
 
 func snapshotMatchesVersion(snap *Snapshot, version int32, generation uint64) bool {
 	return snap != nil && snap.Version == version && snap.Generation == generation
+}
+
+func canonicalDocumentURI(raw string) (string, error) {
+	displayURI, _, err := index.CanonicalizeDocumentURI(raw)
+	if err != nil {
+		return "", err
+	}
+	return displayURI, nil
 }
 
 func (s *Server) cancelAllLintJobs() {
