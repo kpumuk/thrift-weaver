@@ -14,8 +14,6 @@ const (
 
 	// DiagnosticIncludeTargetUnknown reports include directives whose targets cannot be resolved.
 	DiagnosticIncludeTargetUnknown syntax.DiagnosticCode = "LINT_INCLUDE_TARGET_UNKNOWN"
-	// DiagnosticIncludeAliasCollision reports include aliases that collide within one document.
-	DiagnosticIncludeAliasCollision syntax.DiagnosticCode = "LINT_INCLUDE_ALIAS_COLLISION"
 	// DiagnosticQualifiedReferenceUnknown reports qualified references that cannot be resolved through includes.
 	DiagnosticQualifiedReferenceUnknown syntax.DiagnosticCode = "LINT_QUALIFIED_REFERENCE_UNKNOWN"
 	// DiagnosticQualifiedReferenceAmbiguous reports qualified references that resolve ambiguously through includes.
@@ -38,7 +36,7 @@ func (IncludeResolutionWorkspaceRule) ID() string {
 
 // Description returns a human-readable rule summary.
 func (IncludeResolutionWorkspaceRule) Description() string {
-	return "include directives must resolve to unique targets within the workspace"
+	return "include directives must resolve within the workspace"
 }
 
 // RunWorkspace evaluates the rule against an indexed document view.
@@ -58,8 +56,6 @@ func (IncludeResolutionWorkspaceRule) RunWorkspace(ctx context.Context, view *in
 		switch diag.Code {
 		case index.DiagnosticIncludeMissing:
 			out = append(out, newWorkspaceDiagnostic(DiagnosticIncludeTargetUnknown, diag.Message, diag.Severity, diag.Span))
-		case index.DiagnosticIncludeAliasConflict:
-			out = append(out, newWorkspaceDiagnostic(DiagnosticIncludeAliasCollision, diag.Message, diag.Severity, diag.Span))
 		}
 	}
 	return out, nil

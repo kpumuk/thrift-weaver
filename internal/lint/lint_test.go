@@ -448,11 +448,11 @@ func TestRunnerRunWithWorkspaceSurfacesIncludeAndQualifiedReferenceDiagnostics(t
 		if err != nil {
 			t.Fatalf("RunWithWorkspace: %v", err)
 		}
-		if !hasCode(diags, DiagnosticIncludeAliasCollision) {
-			t.Fatalf("missing %s in %+v", DiagnosticIncludeAliasCollision, diags)
-		}
 		if !hasCode(diags, DiagnosticQualifiedReferenceAmbiguous) {
 			t.Fatalf("missing %s in %+v", DiagnosticQualifiedReferenceAmbiguous, diags)
+		}
+		if hasCode(diags, "LINT_INCLUDE_ALIAS_COLLISION") {
+			t.Fatalf("unexpected standalone include alias collision lint in %+v", diags)
 		}
 	})
 }

@@ -680,7 +680,6 @@ Initial workspace rules:
 
 - unresolved include target
 - unresolved qualified type/service reference
-- include alias collision
 - cross-file service extends / throws resolution
 
 ## LSP Protocol Changes
@@ -815,7 +814,7 @@ Acceptance:
 
 - index snapshots build from direct loads, background discovery, and open-document overrides
 - first `didOpen` does not block on a whole-root scan
-- unresolved includes and alias collisions are test-covered
+- unresolved includes and alias-driven ambiguity are test-covered
 
 ### M7: Cross-File Diagnostics
 
