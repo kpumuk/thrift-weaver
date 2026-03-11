@@ -65,6 +65,7 @@ type InitializeResult struct {
 type ServerCapabilities struct {
 	TextDocumentSync                TextDocumentSyncOptions      `json:"textDocumentSync"`
 	DefinitionProvider              bool                         `json:"definitionProvider,omitempty"`
+	DocumentLinkProvider            bool                         `json:"documentLinkProvider,omitempty"`
 	ReferencesProvider              bool                         `json:"referencesProvider,omitempty"`
 	RenameProvider                  bool                         `json:"renameProvider,omitempty"`
 	DocumentFormattingProvider      bool                         `json:"documentFormattingProvider,omitempty"`
@@ -252,6 +253,17 @@ type TextEdit struct {
 type Location struct {
 	URI   string `json:"uri"`
 	Range Range  `json:"range"`
+}
+
+// DocumentLinkParams identifies the target document for document-link requests.
+type DocumentLinkParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// DocumentLink is a minimal LSP document-link payload.
+type DocumentLink struct {
+	Range  Range  `json:"range"`
+	Target string `json:"target,omitempty"`
 }
 
 // WorkspaceSymbolParams is the workspace/symbol request payload.

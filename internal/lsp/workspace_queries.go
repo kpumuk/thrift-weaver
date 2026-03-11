@@ -12,12 +12,54 @@ import (
 
 type workspaceLocationQuery func(context.Context, *index.Manager, index.QueryDocument, itext.UTF16Position) ([]index.Location, error)
 
+type workspaceQueryDocument struct {
+	manager  *index.Manager
+	query    index.QueryDocument
+	snapshot *Snapshot
+	view     *index.DocumentView
+}
+
 // Definition handles textDocument/definition.
 func (s *Server) Definition(ctx context.Context, p DefinitionParams) ([]Location, error) {
 	return s.queryWorkspaceLocations(ctx, p.TextDocument.URI, p.Position, func(ctx context.Context, manager *index.Manager, doc index.QueryDocument, pos itext.UTF16Position) ([]index.Location, error) {
 		locations, _, err := manager.Definition(ctx, doc, pos)
 		return locations, err
 	})
+}
+
+// DocumentLinks handles textDocument/documentLink.
+func (s *Server) DocumentLinks(ctx context.Context, p DocumentLinkParams) ([]DocumentLink, error) {
+	qdoc, err := s.queryWorkspaceDocument(ctx, p.TextDocument.URI)
+	if err != nil {
+		if errors.Is(err, index.ErrContentModified) {
+			return []DocumentLink{}, nil
+		}
+		return nil, err
+	}
+	if qdoc.snapshot == nil || qdoc.snapshot.Tree == nil {
+		return nil, index.ErrContentModified
+	}
+
+	li := qdoc.snapshot.Tree.LineIndex
+	if li == nil {
+		li = itext.NewLineIndex(qdoc.snapshot.Bytes())
+	}
+
+	out := make([]DocumentLink, 0, len(qdoc.view.Document.Includes))
+	for _, include := range qdoc.view.Document.Includes {
+		if include.ResolvedURI == "" {
+			continue
+		}
+		rng, err := lspRangeFromSpan(li, include.Span)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, DocumentLink{
+			Range:  rng,
+			Target: include.ResolvedURI,
+		})
+	}
+	return out, nil
 }
 
 // References handles textDocument/references.
@@ -56,31 +98,58 @@ func (s *Server) WorkspaceSymbols(ctx context.Context, p WorkspaceSymbolParams) 
 	return out, nil
 }
 
-func (s *Server) queryDocumentForWorkspaceRequest(ctx context.Context, uri string) (*index.Manager, index.QueryDocument, error) {
+func (s *Server) queryWorkspaceDocument(ctx context.Context, uri string) (*workspaceQueryDocument, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, index.QueryDocument{}, err
+		return nil, err
 	}
 
 	manager, err := s.ensureWorkspaceManagerForURI(ctx, uri)
 	if err != nil {
-		return nil, index.QueryDocument{}, err
+		return nil, err
 	}
 	if manager == nil {
-		return nil, index.QueryDocument{}, index.ErrWorkspaceClosed
+		return nil, index.ErrWorkspaceClosed
 	}
 
 	snap, err := s.formattingSnapshot(uri, nil)
 	if err != nil {
-		return nil, index.QueryDocument{}, err
+		return nil, err
 	}
-	return manager, index.QueryDocument{
+	query := index.QueryDocument{
 		URI:        snap.URI,
 		Version:    snap.Version,
 		Generation: snap.Generation,
+	}
+
+	workspaceSnapshot, ok := manager.Snapshot()
+	if !ok || workspaceSnapshot == nil {
+		return nil, index.ErrWorkspaceClosed
+	}
+	view, ok, err := index.ViewForDocument(workspaceSnapshot, query.URI)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || view.Document.Version != query.Version || view.Document.Generation != query.Generation {
+		return nil, index.ErrContentModified
+	}
+
+	return &workspaceQueryDocument{
+		manager:  manager,
+		query:    query,
+		snapshot: snap,
+		view:     view,
 	}, nil
+}
+
+func (s *Server) queryDocumentForWorkspaceRequest(ctx context.Context, uri string) (*index.Manager, index.QueryDocument, error) {
+	qdoc, err := s.queryWorkspaceDocument(ctx, uri)
+	if err != nil {
+		return nil, index.QueryDocument{}, err
+	}
+	return qdoc.manager, qdoc.query, nil
 }
 
 func (s *Server) queryWorkspaceLocations(ctx context.Context, uri string, pos Position, query workspaceLocationQuery) ([]Location, error) {

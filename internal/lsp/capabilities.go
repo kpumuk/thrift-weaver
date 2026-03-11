@@ -9,6 +9,7 @@ func DefaultServerCapabilities() ServerCapabilities {
 			Save:      &SaveOptions{IncludeText: false},
 		},
 		DefinitionProvider:              true,
+		DocumentLinkProvider:            true,
 		ReferencesProvider:              true,
 		RenameProvider:                  true,
 		DocumentFormattingProvider:      true,

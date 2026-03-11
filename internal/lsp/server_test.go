@@ -40,7 +40,7 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	if got.TextDocumentSync.Save == nil || got.TextDocumentSync.Save.IncludeText {
 		t.Fatalf("unexpected didSave sync options: %+v", got.TextDocumentSync.Save)
 	}
-	if !got.DefinitionProvider || !got.ReferencesProvider || !got.RenameProvider || !got.WorkspaceSymbolProvider {
+	if !got.DefinitionProvider || !got.DocumentLinkProvider || !got.ReferencesProvider || !got.RenameProvider || !got.WorkspaceSymbolProvider {
 		t.Fatalf("navigation capabilities not advertised: %+v", got)
 	}
 	if got.Workspace == nil || got.Workspace.WorkspaceFolders == nil || !got.Workspace.WorkspaceFolders.Supported || !got.Workspace.WorkspaceFolders.ChangeNotifications {
@@ -932,6 +932,94 @@ func TestServerNavigationQueriesUseLoadedGraphBeforeDiscoveryCompletes(t *testin
 	}
 	if symbols[0].Name != "User" || symbols[1].Name != "UserError" {
 		t.Fatalf("workspace symbols=%+v, want User and UserError", symbols)
+	}
+}
+
+func TestServerDocumentLinksCoverEntireIncludeString(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+
+	links, err := s.DocumentLinks(context.Background(), DocumentLinkParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+	})
+	if err != nil {
+		t.Fatalf("DocumentLinks: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("document link count=%d, want 1", len(links))
+	}
+	if links[0].Target != typesURI {
+		t.Fatalf("document link target=%q, want %q", links[0].Target, typesURI)
+	}
+	if got := lspRangeText(t, mainURI, links[0].Range); got != "\"types.thrift\"" {
+		t.Fatalf("document link text=%q, want %q", got, "\"types.thrift\"")
+	}
+}
+
+func TestServerDocumentLinksRemainAvailableForAliasConflictIncludes(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "duplicate_alias")
+	sharedURI := mustCanonicalURI(t, filepath.Join(root, "shared.thrift"))
+	nestedURI := mustCanonicalURI(t, filepath.Join(root, "nested", "shared.thrift"))
+
+	links, err := s.DocumentLinks(context.Background(), DocumentLinkParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+	})
+	if err != nil {
+		t.Fatalf("DocumentLinks: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("document link count=%d, want 2", len(links))
+	}
+
+	got := make(map[string]string, len(links))
+	for _, link := range links {
+		got[lspRangeText(t, mainURI, link.Range)] = link.Target
+	}
+	if got["\"shared.thrift\""] != sharedURI {
+		t.Fatalf("shared include target=%q, want %q", got["\"shared.thrift\""], sharedURI)
+	}
+	if got["\"nested/shared.thrift\""] != nestedURI {
+		t.Fatalf("nested include target=%q, want %q", got["\"nested/shared.thrift\""], nestedURI)
+	}
+}
+
+func TestServerDispatchDocumentLinksReturnsIncludeTargets(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`35`),
+		Method:  "textDocument/documentLink",
+		Params: mustJSON(t, DocumentLinkParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "35")
+	if resp.Error != nil {
+		t.Fatalf("documentLink error: %+v", resp.Error)
+	}
+	var links []DocumentLink
+	marshalRoundtrip(t, resp.Result, &links)
+	if len(links) != 1 {
+		t.Fatalf("document link count=%d, want 1", len(links))
+	}
+	if links[0].Target != typesURI {
+		t.Fatalf("document link target=%q, want %q", links[0].Target, typesURI)
 	}
 }
 

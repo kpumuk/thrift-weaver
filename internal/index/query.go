@@ -570,7 +570,7 @@ func includeLocationAtOffset(doc *DocumentSummary, offset text.ByteOffset) (Loca
 		return Location{}, false
 	}
 	for _, include := range doc.Includes {
-		if include.Status != IncludeStatusResolved || include.ResolvedURI == "" {
+		if include.ResolvedURI == "" {
 			continue
 		}
 		if include.Span.Contains(offset) {

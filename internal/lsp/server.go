@@ -351,6 +351,16 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(locations)
+	case "textDocument/documentLink":
+		var p DocumentLinkParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		links, err := s.DocumentLinks(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(links)
 	case "textDocument/references":
 		var p ReferenceParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {

@@ -222,6 +222,62 @@ func TestManagerDefinitionAndReferencesReturnEmptyForUnresolvedBinding(t *testin
 	}
 }
 
+func TestManagerDefinitionResolvesIncludeTargetsDespiteAliasConflict(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "duplicate_alias")
+	m := NewManager(Options{WorkspaceRoots: []string{root}})
+	defer m.Close()
+
+	if err := m.RescanWorkspace(context.Background()); err != nil {
+		t.Fatalf("RescanWorkspace: %v", err)
+	}
+
+	mainPath := filepath.Join(root, "main.thrift")
+	snapshot := mustSnapshot(t, m)
+	mainDoc := mustDocument(t, snapshot, mainPath)
+	sharedDoc := mustDocument(t, snapshot, filepath.Join(root, "shared.thrift"))
+	nestedSharedDoc := mustDocument(t, snapshot, filepath.Join(root, "nested", "shared.thrift"))
+	mainSource := testutil.ReadFile(t, mainPath)
+
+	testCases := []struct {
+		name    string
+		needle  string
+		wantURI string
+	}{
+		{
+			name:    "top-level include",
+			needle:  "shared.thrift",
+			wantURI: sharedDoc.URI,
+		},
+		{
+			name:    "nested include",
+			needle:  "nested/shared.thrift",
+			wantURI: nestedSharedDoc.URI,
+		},
+	}
+
+	for _, tc := range testCases {
+		definitions, _, err := m.Definition(context.Background(), QueryDocument{
+			URI:        mainDoc.URI,
+			Version:    mainDoc.Version,
+			Generation: mainDoc.Generation,
+		}, mustUTF16PositionForSubstring(t, mainSource, tc.needle))
+		if err != nil {
+			t.Fatalf("%s Definition: %v", tc.name, err)
+		}
+		if len(definitions) != 1 {
+			t.Fatalf("%s len(Definition)=%d, want 1", tc.name, len(definitions))
+		}
+		if definitions[0].URI != tc.wantURI {
+			t.Fatalf("%s definition URI=%q, want %q", tc.name, definitions[0].URI, tc.wantURI)
+		}
+		if definitions[0].Span != (text.Span{}) {
+			t.Fatalf("%s definition span=%v, want file start", tc.name, definitions[0].Span)
+		}
+	}
+}
+
 func TestManagerDefinitionRejectsContentModified(t *testing.T) {
 	t.Parallel()
 
