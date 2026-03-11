@@ -66,7 +66,7 @@ func NewDefaultRunner() *Runner {
 			NegativeEnumValueRule{},
 		},
 		[]WorkspaceRule{
-			IncludeResolutionWorkspaceRule{},
+			IncludeTargetsWorkspaceRule{},
 			QualifiedReferenceWorkspaceRule{},
 			WorkspaceServiceSemanticsRule{},
 		},

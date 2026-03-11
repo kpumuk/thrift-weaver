@@ -271,6 +271,7 @@ type IncludeEdge struct {
     Alias       string
     Span        text.Span
     ResolvedURI string
+    ResolvedKey DocumentKey
     Status      IncludeStatus
 }
 
@@ -402,7 +403,7 @@ Path rules:
 - symlinks are resolved before identity comparison
 - resolved files must remain under a configured workspace root or include directory
 - include resolution may materialize a previously undiscovered on-disk document on demand
-- duplicate include aliases within one document are diagnostics and block rename for affected references
+- duplicate include aliases within one document do not emit standalone diagnostics, but references through that alias become ambiguous and block rename for affected sites
 
 Tie-breaking and deduplication rules:
 

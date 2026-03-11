@@ -39,7 +39,7 @@ func TestManagerResolvesIncludesAndBindings(t *testing.T) {
 	}
 }
 
-func TestManagerReportsMissingIncludeAndAliasConflicts(t *testing.T) {
+func TestManagerReportsMissingIncludeAndAliasDrivenAmbiguity(t *testing.T) {
 	t.Parallel()
 
 	t.Run("missing include", func(t *testing.T) {
@@ -78,8 +78,8 @@ func TestManagerReportsMissingIncludeAndAliasConflicts(t *testing.T) {
 		if got := mainDoc.References[0].Binding.Status; got != BindingStatusAmbiguous {
 			t.Fatalf("binding status=%q, want %q", got, BindingStatusAmbiguous)
 		}
-		if !hasDiagnostic(mainDoc.Diagnostics, DiagnosticIncludeAliasConflict) {
-			t.Fatalf("missing %s diagnostic: %+v", DiagnosticIncludeAliasConflict, mainDoc.Diagnostics)
+		if len(mainDoc.Diagnostics) != 0 {
+			t.Fatalf("unexpected index diagnostics: %+v", mainDoc.Diagnostics)
 		}
 	})
 }

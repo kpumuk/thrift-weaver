@@ -48,10 +48,9 @@ type IncludeStatus string
 
 // IncludeStatus values describe the include resolution outcome recorded in a snapshot.
 const (
-	IncludeStatusUnknown       IncludeStatus = "unknown"
-	IncludeStatusResolved      IncludeStatus = "resolved"
-	IncludeStatusMissing       IncludeStatus = "missing"
-	IncludeStatusAliasConflict IncludeStatus = "alias_conflict"
+	IncludeStatusUnknown  IncludeStatus = "unknown"
+	IncludeStatusResolved IncludeStatus = "resolved"
+	IncludeStatusMissing  IncludeStatus = "missing"
 )
 
 // BindingStatus describes how a reference site resolved.

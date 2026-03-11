@@ -20,8 +20,8 @@ const (
 	DiagnosticQualifiedReferenceAmbiguous syntax.DiagnosticCode = "LINT_QUALIFIED_REFERENCE_AMBIGUOUS"
 )
 
-// IncludeResolutionWorkspaceRule surfaces include-resolution diagnostics from the workspace index.
-type IncludeResolutionWorkspaceRule struct{}
+// IncludeTargetsWorkspaceRule surfaces include-target diagnostics from the workspace index.
+type IncludeTargetsWorkspaceRule struct{}
 
 // QualifiedReferenceWorkspaceRule validates qualified type references that require include resolution.
 type QualifiedReferenceWorkspaceRule struct{}
@@ -30,17 +30,17 @@ type QualifiedReferenceWorkspaceRule struct{}
 type WorkspaceServiceSemanticsRule struct{}
 
 // ID returns the stable rule identifier.
-func (IncludeResolutionWorkspaceRule) ID() string {
-	return "workspace_include_resolution"
+func (IncludeTargetsWorkspaceRule) ID() string {
+	return "workspace_include_targets"
 }
 
 // Description returns a human-readable rule summary.
-func (IncludeResolutionWorkspaceRule) Description() string {
-	return "include directives must resolve within the workspace"
+func (IncludeTargetsWorkspaceRule) Description() string {
+	return "include directives must resolve to files within the workspace"
 }
 
 // RunWorkspace evaluates the rule against an indexed document view.
-func (IncludeResolutionWorkspaceRule) RunWorkspace(ctx context.Context, view *index.DocumentView) ([]syntax.Diagnostic, error) {
+func (IncludeTargetsWorkspaceRule) RunWorkspace(ctx context.Context, view *index.DocumentView) ([]syntax.Diagnostic, error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return nil, err

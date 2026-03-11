@@ -11,7 +11,6 @@ import (
 // Diagnostic codes emitted by the workspace index foundation.
 const (
 	DiagnosticIncludeMissing            = "INDEX_INCLUDE_MISSING"
-	DiagnosticIncludeAliasConflict      = "INDEX_INCLUDE_ALIAS_CONFLICT"
 	DiagnosticIncludeDuplicatePath      = "INDEX_INCLUDE_DUPLICATE_PATH"
 	DiagnosticDocumentPathCollision     = "INDEX_DOCUMENT_PATH_COLLISION"
 	DiagnosticQualifiedReferenceUnknown = "INDEX_QUALIFIED_REFERENCE_UNKNOWN"

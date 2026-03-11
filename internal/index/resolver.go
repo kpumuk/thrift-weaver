@@ -63,11 +63,9 @@ func resolveIncludesForSummary(summary *DocumentSummary, resolver *includeResolv
 		return
 	}
 
-	aliasCounts := make(map[string]int, len(summary.Includes))
 	resolvedByKey := make(map[DocumentKey]string, len(summary.Includes))
 	for i := range summary.Includes {
 		edge := &summary.Includes[i]
-		aliasCounts[edge.Alias]++
 
 		resolvedURI, resolvedKey, ok := resolver.resolveIncludePath(summary.URI, edge.RawPath)
 		if !ok {
@@ -98,21 +96,6 @@ func resolveIncludesForSummary(summary *DocumentSummary, resolver *includeResolv
 			continue
 		}
 		resolvedByKey[resolvedKey] = edge.RawPath
-	}
-
-	for i := range summary.Includes {
-		edge := &summary.Includes[i]
-		if aliasCounts[edge.Alias] < 2 {
-			continue
-		}
-		edge.Status = IncludeStatusAliasConflict
-		summary.Diagnostics = append(summary.Diagnostics, newDiagnostic(
-			summary.URI,
-			DiagnosticIncludeAliasConflict,
-			fmt.Sprintf("include alias %q is duplicated within the same document", edge.Alias),
-			syntax.SeverityError,
-			edge.Span,
-		))
 	}
 }
 

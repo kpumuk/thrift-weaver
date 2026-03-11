@@ -451,8 +451,8 @@ func TestRunnerRunWithWorkspaceSurfacesIncludeAndQualifiedReferenceDiagnostics(t
 		if !hasCode(diags, DiagnosticQualifiedReferenceAmbiguous) {
 			t.Fatalf("missing %s in %+v", DiagnosticQualifiedReferenceAmbiguous, diags)
 		}
-		if hasCode(diags, "LINT_INCLUDE_ALIAS_COLLISION") {
-			t.Fatalf("unexpected standalone include alias collision lint in %+v", diags)
+		if hasCode(diags, DiagnosticIncludeTargetUnknown) {
+			t.Fatalf("unexpected include-target diagnostic in %+v", diags)
 		}
 	})
 }

@@ -154,8 +154,7 @@ thriftlint --cross-file workspace --workspace-root . --include-dir idl path/to/f
 
 When cross-file analysis is enabled, `thriftlint` also checks:
 
-- include targets resolve to exactly one file
-- include aliases do not collide within the same document
+- include targets resolve within the configured workspace/include search paths
 - qualified references such as `shared.User` resolve in the workspace
 - cross-file `service extends` targets resolve to services
 - cross-file `throws` targets resolve to exceptions
