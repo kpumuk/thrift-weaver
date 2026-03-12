@@ -1,6 +1,7 @@
 <h3 align="center">
-	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="100" alt="Logo"/><br/>
-	Thrift Weaver for <a href="https://code.visualstudio.com">VSCode</a>
+	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="128" alt="Logo"/><br/>
+	Weaver for Apache Thift<br/>
+    Linter, Formatter, LSP Server and a <a href="https://code.visualstudio.com">VS Code</a> Extension
 </h3>
 
 <p align="center">
@@ -9,7 +10,10 @@
     <a href="https://github.com/kpumuk/thrift-weaver/contributors"><img src="https://img.shields.io/github/contributors/kpumuk/thrift-weaver?colorA=363a4f&colorB=a6da95&style=for-the-badge"></a>
 </p>
 
-`thrift-weaver` helps you write and format Thrift IDL files.
+**Weaver for Apache Thift** helps you write and format Apache Thrift IDL files.
+
+> [!NOTE]
+> **Weaver for Apache Thift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation. Repository names, module paths, and extension identifiers currently use `thrift-weaver`.
 
 It has three parts:
 
@@ -20,12 +24,12 @@ It has three parts:
 
 It is made for daily editor use. It keeps comments. It stays stable. It can handle broken or half-written files while you type.
 
-All three binaries are pure Go (`CGO_ENABLED=0`) and embed the Thrift parser wasm artifact. No external `.wasm` file is required at runtime.
+All three binaries are pure Go (`CGO_ENABLED=0`) and embed the Apache Thrift grammar wasm artifact. No external `.wasm` file is required at runtime.
 
 > [!IMPORTANT]
 > Read [RFC 0001](docs/rfcs/0001-thrift-tooling-platform.md) before code changes. If behavior or policy changes, update the RFC in the same PR.
 
-## Why Use `thrift-weaver`
+## Why Use Weaver for Apache Thift
 
 - One stack for CLI and editor use.
 - Safe mode: if format is not safe, the tool returns an error.
@@ -227,7 +231,7 @@ If you change behavior or policy, update [RFC 0001](docs/rfcs/0001-thrift-toolin
 
 - `cmd/`: CLI entry points (`thriftfmt`, `thriftlint`, `thriftls`).
 - `internal/`: core engine packages (`text`, `lexer`, `syntax`, `format`, `lsp`).
-- `grammar/tree-sitter-thrift/`: Thrift grammar and generated parser assets.
+- `grammar/tree-sitter-thrift/`: Apache Thrift grammar and generated parser assets.
 - `editors/vscode/`: VS Code extension client.
 - `testdata/`: formatter fixtures, LSP scenarios, and corpus files.
 - `docs/`: RFCs, architecture notes, user guide, and release policy.

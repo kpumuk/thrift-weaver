@@ -1,8 +1,8 @@
-# Thrift Weaver - Agents Context
+# Weaver for Apache Thift - Agents Context
 
 ## What
 
-`thrift-weaver` is a new tooling project for Thrift IDL development:
+`thrift-weaver` is the repository for **Weaver for Apache Thift**, a tooling project for Apache Thrift IDL development:
 
 - `thriftfmt` (formatter)
 - `thriftls` (LSP server)

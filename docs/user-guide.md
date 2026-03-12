@@ -1,13 +1,17 @@
-# User Guide (Beta)
+# User Guide
+
+**Weaver for Apache Thift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation.
+
+Repository, module, and extension package identifiers currently use `thrift-weaver` / `thrift-weaver-vscode`.
 
 This document covers how to use:
 
 - `thriftfmt` (formatter CLI)
 - `thriftlint` (linter CLI)
 - `thriftls` (LSP server)
-- the VS Code extension (`thrift-weaver-vscode`)
+- the VS Code extension (current package ID `thrift-weaver-vscode`)
 
-Beta status:
+Current status:
 - `thriftfmt`, `thriftlint`, and `thriftls` are usable now
 - VS Code extension supports both managed `thriftls` install and external `thriftls` path fallback
 
@@ -235,7 +239,7 @@ code --install-extension thrift-weaver-vscode-<version>.vsix --force
 
 ### Configure `thriftls`
 
-Current beta behavior:
+Current behavior:
 - managed install is enabled by default and attempts to download/install `thriftls` using the configured manifest
 - if managed install fails and `thrift.server.path` is configured, the extension falls back to that external binary
 - if both managed install and external path are unavailable, the extension shows an actionable warning/error
@@ -250,7 +254,7 @@ Useful settings:
 - `thrift.managedInstall.manifestUrl`: manifest URL used by managed install
 - `thrift.managedInstall.allowInsecureHttp`: allow non-HTTPS URLs for local/testing use only
 
-Extension defaults for Thrift files:
+Extension defaults for Apache Thrift files:
 
 - `editor.tabSize = 2`
 - `editor.insertSpaces = true`
@@ -265,20 +269,20 @@ Extension defaults for Thrift files:
 - folding ranges
 - selection ranges
 - semantic tokens
-- `Thrift: Restart Language Server` command
+- `Weaver for Apache Thift: Restart Language Server` command
 
 ### Troubleshooting
 
 If the extension command is missing or features are not working:
 
-1. Check the extension output channels:
-   - `Thrift Weaver`
-   - `Thrift Weaver LSP Trace`
+1. Check the current extension output channels:
+   - `Weaver for Apache Thift`
+   - `Weaver for Apache Thift LSP Trace`
 2. Confirm `thrift.server.path` points to an existing `thriftls` binary
 3. Run `Developer: Reload Window`
 4. Ensure the file language mode is `Thrift`
 
-## Managed Install vs External Path (Beta Guidance)
+## Managed Install vs External Path
 
 ### External path
 
@@ -310,9 +314,9 @@ Release pipeline support already exists:
 
 Implementation status in extension:
 
-- shipped in current beta build
+- shipped in the current build
 - external path remains fully supported for pinned/offline/internal workflows
 
 ## Linux Compatibility (Managed Binary Policy)
 
-See `docs/linux-managed-binary-compatibility.md` for the explicit beta policy (glibc baseline, fallback guidance, and release-note requirements).
+See `docs/linux-managed-binary-compatibility.md` for the explicit compatibility policy (glibc baseline, fallback guidance, and release-note requirements).

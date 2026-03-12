@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document summarizes the current `thrift-weaver` architecture and code ownership boundaries.
+This document summarizes the current architecture and code ownership boundaries for the **Weaver for Apache Thift**.
 
 The RFC remains the source of truth for product and behavior decisions:
 
@@ -69,7 +69,7 @@ Core implementation areas:
 - `internal/format`
   - formatting policies and errors (`ErrUnsafeToFormat`)
   - doc/printer primitives
-  - syntax-aware Thrift formatting and range formatting
+  - syntax-aware Apache Thrift formatting and range formatting
 - `internal/lsp`
   - stdio JSON-RPC transport
   - document snapshots/versioning
@@ -106,7 +106,7 @@ Support code:
 
 ## Parse + Format Pipeline (Core Data Flow)
 
-`thrift-weaver` intentionally separates:
+Weaver for Apache Thrift intentionally separates:
 
 - lexical fidelity (`internal/lexer`) for comments/trivia/raw token spans
 - syntax structure (`tree-sitter` via `internal/syntax`) for robust CST queries
@@ -117,7 +117,7 @@ The formatter combines both.
 flowchart TD
   SRC["Source bytes"]
   LEX["lexer.Lex<br/>Tokens + Trivia + lexer diagnostics"]
-  TS["tree-sitter parse<br/>(generated Thrift grammar)"]
+  TS["tree-sitter parse<br/>(generated Apache Thrift grammar)"]
   SYN["syntax.Parse<br/>Tree + CST nodes + merged diagnostics"]
   SAFE{"Unsafe to format?<br/>(ErrUnsafeToFormat)"}
   DOC["format.Document / format.Range<br/>syntax-aware formatting"]
