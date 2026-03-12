@@ -2,9 +2,13 @@ package lint
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
+	"github.com/kpumuk/thrift-weaver/internal/testutil"
 )
 
 func TestFieldIDRequiredRule(t *testing.T) {
@@ -410,6 +414,82 @@ service API extends MissingService {
 	}
 }
 
+func TestRunnerRunWithWorkspaceSurfacesIncludeAndQualifiedReferenceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	runner := NewDefaultRunner()
+
+	t.Run("missing include", func(t *testing.T) {
+		t.Parallel()
+
+		view := mustWorkspaceView(t, "missing_include", "main.thrift")
+		diags, err := runner.RunWithWorkspace(context.Background(), view)
+		if err != nil {
+			t.Fatalf("RunWithWorkspace: %v", err)
+		}
+		if !hasCode(diags, DiagnosticIncludeTargetUnknown) {
+			t.Fatalf("missing %s in %+v", DiagnosticIncludeTargetUnknown, diags)
+		}
+		if !hasCode(diags, DiagnosticQualifiedReferenceUnknown) {
+			t.Fatalf("missing %s in %+v", DiagnosticQualifiedReferenceUnknown, diags)
+		}
+		for _, diag := range diags {
+			if diag.Source != DiagnosticSourceWorkspace {
+				t.Fatalf("diagnostic source=%q, want %q", diag.Source, DiagnosticSourceWorkspace)
+			}
+		}
+	})
+
+	t.Run("duplicate alias", func(t *testing.T) {
+		t.Parallel()
+
+		view := mustWorkspaceView(t, "duplicate_alias", "main.thrift")
+		diags, err := runner.RunWithWorkspace(context.Background(), view)
+		if err != nil {
+			t.Fatalf("RunWithWorkspace: %v", err)
+		}
+		if !hasCode(diags, DiagnosticQualifiedReferenceAmbiguous) {
+			t.Fatalf("missing %s in %+v", DiagnosticQualifiedReferenceAmbiguous, diags)
+		}
+		if hasCode(diags, DiagnosticIncludeTargetUnknown) {
+			t.Fatalf("unexpected include-target diagnostic in %+v", diags)
+		}
+	})
+}
+
+func TestRunnerRunWithWorkspaceValidatesQualifiedServiceSemantics(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "types.thrift"), "struct NotService {}\nstruct NotException {}\n")
+	writeFile(t, filepath.Join(root, "main.thrift"), "include \"types.thrift\"\n\nservice API extends types.NotService {\n  void ping() throws (1: types.NotException boom)\n}\n")
+
+	view := mustWorkspaceViewAtPath(t, root, "main.thrift")
+	diags, err := NewDefaultRunner().RunWithWorkspace(context.Background(), view)
+	if err != nil {
+		t.Fatalf("RunWithWorkspace: %v", err)
+	}
+	if !hasCode(diags, DiagnosticServiceExtendsNotService) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceExtendsNotService, diags)
+	}
+	if !hasCode(diags, DiagnosticServiceThrowsNotException) {
+		t.Fatalf("missing %s in %+v", DiagnosticServiceThrowsNotException, diags)
+	}
+}
+
+func TestRunnerRunWithWorkspaceResolvedNavigationHasNoWorkspaceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	view := mustWorkspaceView(t, "navigation", "main.thrift")
+	diags, err := NewDefaultRunner().RunWithWorkspace(context.Background(), view)
+	if err != nil {
+		t.Fatalf("RunWithWorkspace: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Fatalf("diagnostic count=%d, want 0 (%+v)", len(diags), diags)
+	}
+}
+
 func mustParseTree(t *testing.T, src string) *syntax.Tree {
 	t.Helper()
 
@@ -427,4 +507,38 @@ func hasCode(diags []syntax.Diagnostic, code syntax.DiagnosticCode) bool {
 		}
 	}
 	return false
+}
+
+func mustWorkspaceView(t *testing.T, fixtureName, relativePath string) *index.DocumentView {
+	t.Helper()
+	root := testutil.CopyWorkspaceFixture(t, fixtureName)
+	return mustWorkspaceViewAtPath(t, root, relativePath)
+}
+
+func mustWorkspaceViewAtPath(t *testing.T, root, relativePath string) *index.DocumentView {
+	t.Helper()
+	manager := index.NewManager(index.Options{WorkspaceRoots: []string{root}})
+	t.Cleanup(manager.Close)
+	if err := manager.RescanWorkspace(context.Background()); err != nil {
+		t.Fatalf("RescanWorkspace: %v", err)
+	}
+	snapshot, ok := manager.Snapshot()
+	if !ok {
+		t.Fatal("expected workspace snapshot")
+	}
+	view, ok, err := index.ViewForDocument(snapshot, filepath.Join(root, relativePath))
+	if err != nil {
+		t.Fatalf("ViewForDocument: %v", err)
+	}
+	if !ok {
+		t.Fatalf("missing workspace document for %s", relativePath)
+	}
+	return view
+}
+
+func writeFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
 }

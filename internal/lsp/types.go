@@ -35,7 +35,25 @@ type CancelParams struct {
 
 // InitializeParams is the LSP initialize request payload subset used in v1.
 type InitializeParams struct {
-	ProcessID *int64 `json:"processId,omitempty"`
+	ProcessID        *int64            `json:"processId,omitempty"`
+	WorkspaceFolders []WorkspaceFolder `json:"workspaceFolders,omitempty"`
+}
+
+// WorkspaceFolder is the LSP workspace folder descriptor used during initialize.
+type WorkspaceFolder struct {
+	URI  string `json:"uri"`
+	Name string `json:"name,omitempty"`
+}
+
+// WorkspaceFoldersChangeEvent describes added and removed workspace folders.
+type WorkspaceFoldersChangeEvent struct {
+	Added   []WorkspaceFolder `json:"added"`
+	Removed []WorkspaceFolder `json:"removed"`
+}
+
+// DidChangeWorkspaceFoldersParams is the workspace/didChangeWorkspaceFolders payload.
+type DidChangeWorkspaceFoldersParams struct {
+	Event WorkspaceFoldersChangeEvent `json:"event"`
 }
 
 // InitializeResult is the LSP initialize response payload.
@@ -45,13 +63,30 @@ type InitializeResult struct {
 
 // ServerCapabilities declares supported LSP features.
 type ServerCapabilities struct {
-	TextDocumentSync                TextDocumentSyncOptions `json:"textDocumentSync"`
-	DocumentFormattingProvider      bool                    `json:"documentFormattingProvider,omitempty"`
-	DocumentRangeFormattingProvider bool                    `json:"documentRangeFormattingProvider,omitempty"`
-	DocumentSymbolProvider          bool                    `json:"documentSymbolProvider,omitempty"`
-	FoldingRangeProvider            bool                    `json:"foldingRangeProvider,omitempty"`
-	SelectionRangeProvider          bool                    `json:"selectionRangeProvider,omitempty"`
-	SemanticTokensProvider          *SemanticTokensOptions  `json:"semanticTokensProvider,omitempty"`
+	TextDocumentSync                TextDocumentSyncOptions      `json:"textDocumentSync"`
+	DefinitionProvider              bool                         `json:"definitionProvider,omitempty"`
+	DocumentLinkProvider            bool                         `json:"documentLinkProvider,omitempty"`
+	ReferencesProvider              bool                         `json:"referencesProvider,omitempty"`
+	RenameProvider                  bool                         `json:"renameProvider,omitempty"`
+	DocumentFormattingProvider      bool                         `json:"documentFormattingProvider,omitempty"`
+	DocumentRangeFormattingProvider bool                         `json:"documentRangeFormattingProvider,omitempty"`
+	DocumentSymbolProvider          bool                         `json:"documentSymbolProvider,omitempty"`
+	FoldingRangeProvider            bool                         `json:"foldingRangeProvider,omitempty"`
+	SelectionRangeProvider          bool                         `json:"selectionRangeProvider,omitempty"`
+	WorkspaceSymbolProvider         bool                         `json:"workspaceSymbolProvider,omitempty"`
+	Workspace                       *WorkspaceServerCapabilities `json:"workspace,omitempty"`
+	SemanticTokensProvider          *SemanticTokensOptions       `json:"semanticTokensProvider,omitempty"`
+}
+
+// WorkspaceServerCapabilities declares supported workspace-scoped features.
+type WorkspaceServerCapabilities struct {
+	WorkspaceFolders *WorkspaceFoldersServerCapabilities `json:"workspaceFolders,omitempty"`
+}
+
+// WorkspaceFoldersServerCapabilities declares workspace folder change support.
+type WorkspaceFoldersServerCapabilities struct {
+	Supported           bool `json:"supported"`
+	ChangeNotifications bool `json:"changeNotifications,omitempty"`
 }
 
 // TextDocumentSyncOptions declares document sync behavior.
@@ -126,6 +161,26 @@ type DidSaveParams struct {
 	Text         *string                `json:"text,omitempty"`
 }
 
+// FileEvent is a workspace/didChangeWatchedFiles change entry.
+type FileEvent struct {
+	URI  string `json:"uri"`
+	Type int    `json:"type"`
+}
+
+const (
+	// FileChangeTypeCreated indicates a created file.
+	FileChangeTypeCreated = 1
+	// FileChangeTypeChanged indicates a modified file.
+	FileChangeTypeChanged = 2
+	// FileChangeTypeDeleted indicates a deleted file.
+	FileChangeTypeDeleted = 3
+)
+
+// DidChangeWatchedFilesParams is the workspace/didChangeWatchedFiles payload.
+type DidChangeWatchedFilesParams struct {
+	Changes []FileEvent `json:"changes"`
+}
+
 // SaveOptions controls textDocument/didSave payload behavior.
 type SaveOptions struct {
 	IncludeText bool `json:"includeText,omitempty"`
@@ -160,6 +215,26 @@ type DocumentFormattingParams struct {
 	Options      FormattingOptions      `json:"options"`
 }
 
+// TextDocumentPositionParams identifies a document position request.
+type TextDocumentPositionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// DefinitionParams is the textDocument/definition request payload.
+type DefinitionParams = TextDocumentPositionParams
+
+// ReferenceContext configures reference lookup behavior.
+type ReferenceContext struct {
+	IncludeDeclaration bool `json:"includeDeclaration"`
+}
+
+// ReferenceParams is the textDocument/references request payload.
+type ReferenceParams struct {
+	TextDocumentPositionParams
+	Context ReferenceContext `json:"context"`
+}
+
 // DocumentRangeFormattingParams is the LSP range formatting request payload.
 type DocumentRangeFormattingParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
@@ -172,6 +247,68 @@ type DocumentRangeFormattingParams struct {
 type TextEdit struct {
 	Range   Range  `json:"range"`
 	NewText string `json:"newText"`
+}
+
+// Location is a minimal LSP location.
+type Location struct {
+	URI   string `json:"uri"`
+	Range Range  `json:"range"`
+}
+
+// DocumentLinkParams identifies the target document for document-link requests.
+type DocumentLinkParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// DocumentLink is a minimal LSP document-link payload.
+type DocumentLink struct {
+	Range  Range  `json:"range"`
+	Target string `json:"target,omitempty"`
+}
+
+// WorkspaceSymbolParams is the workspace/symbol request payload.
+type WorkspaceSymbolParams struct {
+	Query string `json:"query"`
+}
+
+// SymbolInformation is a minimal workspace symbol result.
+type SymbolInformation struct {
+	Name          string   `json:"name"`
+	Kind          int      `json:"kind"`
+	Location      Location `json:"location"`
+	ContainerName string   `json:"containerName,omitempty"`
+}
+
+// PrepareRenameParams is the textDocument/prepareRename request payload.
+type PrepareRenameParams = TextDocumentPositionParams
+
+// RenameParams is the textDocument/rename request payload.
+type RenameParams struct {
+	TextDocumentPositionParams
+	NewName string `json:"newName"`
+}
+
+// PrepareRenameResult describes the editable range and placeholder for rename.
+type PrepareRenameResult struct {
+	Range       Range  `json:"range"`
+	Placeholder string `json:"placeholder,omitempty"`
+}
+
+// OptionalVersionedTextDocumentIdentifier identifies a document for workspace edits.
+type OptionalVersionedTextDocumentIdentifier struct {
+	URI     string `json:"uri"`
+	Version *int32 `json:"version,omitempty"`
+}
+
+// TextDocumentEdit is a workspace edit for one document.
+type TextDocumentEdit struct {
+	TextDocument OptionalVersionedTextDocumentIdentifier `json:"textDocument"`
+	Edits        []TextEdit                              `json:"edits"`
+}
+
+// WorkspaceEdit is an LSP workspace edit response payload.
+type WorkspaceEdit struct {
+	DocumentChanges []TextDocumentEdit `json:"documentChanges,omitempty"`
 }
 
 // DocumentSymbolParams identifies the target document for symbol requests.

@@ -11,12 +11,14 @@ import {
 } from 'vscode-languageclient/node.js';
 import { installManagedThriftls } from './managedInstall';
 import { resolveServerPath } from './serverPathResolver';
+import { buildServerArgs } from './serverArgs';
 
 type TraceLevel = 'off' | 'messages' | 'verbose';
 
 type ThriftConfig = {
   serverPath: string;
   serverArgs: string[];
+  workspaceIndexWorkers: number;
   lineWidth: number;
   traceServer: TraceLevel;
   managedInstallEnabled: boolean;
@@ -128,9 +130,10 @@ async function startLanguageClient(context: vscode.ExtensionContext, reason: str
     logError(`managed install failed; using external thriftls fallback: ${resolved.path}`);
   }
 
+  const serverArgs = buildServerArgs(config.serverArgs, config.workspaceIndexWorkers);
   const serverOptions: ServerOptions = {
     command: resolved.path,
-    args: config.serverArgs,
+    args: serverArgs,
     transport: TransportKind.stdio,
   };
   const clientOptions: LanguageClientOptions = {
@@ -158,7 +161,7 @@ async function startLanguageClient(context: vscode.ExtensionContext, reason: str
   try {
     logInfo(
       `starting language server (${reason}, source=${resolved.source}): ${resolved.path}${
-        config.serverArgs.length > 0 ? ` ${config.serverArgs.join(' ')}` : ''
+        serverArgs.length > 0 ? ` ${serverArgs.join(' ')}` : ''
       }`,
     );
     context.subscriptions.push(nextClient);
@@ -197,6 +200,7 @@ function readThriftConfig(): ThriftConfig {
   const cfg = vscode.workspace.getConfiguration('thrift');
   const pathValue = cfg.get<string>('server.path', '').trim();
   const argsValue = cfg.get<unknown[]>('server.args', []);
+  const workspaceIndexWorkersValue = cfg.get<number>('workspace.indexWorkers', 0);
   const lineWidthValue = cfg.get<number>('format.lineWidth', 100);
   const traceValue = cfg.get<string>('trace.server', 'off');
   const managedInstallEnabled = cfg.get<boolean>('managedInstall.enabled', true);
@@ -209,12 +213,17 @@ function readThriftConfig(): ThriftConfig {
   const serverArgs = Array.isArray(argsValue)
     ? argsValue.filter((v): v is string => typeof v === 'string')
     : [];
+  const workspaceIndexWorkers =
+    Number.isFinite(workspaceIndexWorkersValue) && workspaceIndexWorkersValue >= 0
+      ? Math.trunc(workspaceIndexWorkersValue)
+      : 0;
   const lineWidth = Number.isFinite(lineWidthValue) && lineWidthValue > 0 ? Math.trunc(lineWidthValue) : 100;
   const traceServer = traceValue === 'messages' || traceValue === 'verbose' ? traceValue : 'off';
 
   return {
     serverPath: pathValue,
     serverArgs,
+    workspaceIndexWorkers,
     lineWidth,
     traceServer,
     managedInstallEnabled,

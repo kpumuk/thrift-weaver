@@ -15,6 +15,11 @@ type observingFactory struct {
 	newParserCalls int
 }
 
+type observingFailSecondFactory struct {
+	mu             sync.Mutex
+	newParserCalls int
+}
+
 type failingFactory struct {
 	err error
 }
@@ -78,6 +83,28 @@ func (f *observingFactory) calls() int {
 	return f.newParserCalls
 }
 
+func (f *observingFailSecondFactory) Name() string {
+	return "observing-fail-second-factory"
+}
+
+func (f *observingFailSecondFactory) NewParser() (parserbackend.Parser, error) {
+	f.mu.Lock()
+	f.newParserCalls++
+	f.mu.Unlock()
+
+	inner, err := ts.NewParser()
+	if err != nil {
+		return nil, err
+	}
+	return &failSecondParseParser{inner: inner}, nil
+}
+
+func (f *observingFailSecondFactory) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.newParserCalls
+}
+
 func TestParseUsesParserFactoryWiring(t *testing.T) {
 	factory := &observingFactory{}
 	restore := setParserFactoryForTesting(factory)
@@ -116,6 +143,72 @@ func TestParseFailOpenWhenParserInitializationFails(t *testing.T) {
 	}
 	if !sawInternalParse {
 		t.Fatalf("expected INTERNAL_PARSE diagnostic, got %+v", tree.Diagnostics)
+	}
+}
+
+func TestReusableParserReusesBackendParserAcrossFullParses(t *testing.T) {
+	factory := &observingFactory{}
+	restore := setParserFactoryForTesting(factory)
+	defer restore()
+
+	parser := NewReusableParser()
+	defer parser.Close()
+
+	src := []byte("struct Reusable { 1: string name, }\n")
+	for range 2 {
+		tree, err := parser.Parse(context.Background(), src, ParseOptions{URI: "file:///reusable.thrift"})
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if tree.Root == NoNode {
+			t.Fatalf("expected full parse tree, got %+v", tree.Diagnostics)
+		}
+	}
+
+	if got := factory.calls(); got != 1 {
+		t.Fatalf("NewParser() calls = %d, want 1", got)
+	}
+}
+
+func TestReusableParserRecreatesBackendParserAfterFailure(t *testing.T) {
+	factory := &observingFailSecondFactory{}
+	restore := setParserFactoryForTesting(factory)
+	defer restore()
+
+	parser := NewReusableParser()
+	defer parser.Close()
+
+	src := []byte("struct Retry { 1: string name, }\n")
+
+	tree, err := parser.Parse(context.Background(), src, ParseOptions{URI: "file:///retry.thrift"})
+	if err != nil {
+		t.Fatalf("first Parse: %v", err)
+	}
+	if tree.Root == NoNode {
+		t.Fatalf("expected first parse to succeed, got %+v", tree.Diagnostics)
+	}
+
+	tree, err = parser.Parse(context.Background(), src, ParseOptions{URI: "file:///retry.thrift"})
+	if err != nil {
+		t.Fatalf("second Parse: %v", err)
+	}
+	if tree.Root != NoNode {
+		t.Fatalf("expected degraded tree after injected parser failure, got root=%d", tree.Root)
+	}
+	if !hasDiagnosticCode(tree.Diagnostics, DiagnosticInternalParse) {
+		t.Fatalf("expected INTERNAL_PARSE diagnostic after injected parser failure, got %+v", tree.Diagnostics)
+	}
+
+	tree, err = parser.Parse(context.Background(), src, ParseOptions{URI: "file:///retry.thrift"})
+	if err != nil {
+		t.Fatalf("third Parse: %v", err)
+	}
+	if tree.Root == NoNode {
+		t.Fatalf("expected parser recreation after failure, got %+v", tree.Diagnostics)
+	}
+
+	if got := factory.calls(); got != 2 {
+		t.Fatalf("NewParser() calls = %d, want 2", got)
 	}
 }
 

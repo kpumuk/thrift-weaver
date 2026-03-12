@@ -112,6 +112,7 @@ When that happens it prints:
 thriftlint path/to/file.thrift
 thriftlint --stdin --assume-filename foo.thrift < input.thrift
 thriftlint --format json path/to/file.thrift
+thriftlint --cross-file workspace --workspace-root . --include-dir idl path/to/file.thrift
 ```
 
 ### Important flags
@@ -119,6 +120,17 @@ thriftlint --format json path/to/file.thrift
 - `--stdin`: read input from stdin
 - `--assume-filename`: parser context/diagnostic filename when using stdin
 - `--format`: output format, `text` or `json`
+- `--cross-file`: cross-file analysis mode, `off`, `transitive`, or `workspace`
+- `--workspace-root`: workspace root for cross-file analysis, repeatable
+- `--include-dir`: include directory for cross-file analysis, repeatable
+
+### Cross-file analysis modes
+
+- path input defaults to `--cross-file transitive`, which treats the input file's directory as the implicit workspace root when `--workspace-root` is omitted
+- `--stdin` defaults to `--cross-file off`
+- `--cross-file workspace` keeps workspace analysis explicit for stdin and requires both `--assume-filename` and at least one `--workspace-root`
+- `--include-dir` adds extra include search roots on top of the workspace roots
+- `--cross-file off` preserves the original single-document behavior when you want a fast local-only run
 
 ### Exit codes
 
@@ -140,6 +152,13 @@ thriftlint --format json path/to/file.thrift
 - `required` fields are rejected inside `union`
 - negative explicit enum values are rejected
 
+When cross-file analysis is enabled, `thriftlint` also checks:
+
+- include targets resolve within the configured workspace/include search paths
+- qualified references such as `shared.User` resolve in the workspace
+- cross-file `service extends` targets resolve to services
+- cross-file `throws` targets resolve to exceptions
+
 ## `thriftls` (LSP Server)
 
 `thriftls` is a stdio LSP server intended to be launched by editors/clients.
@@ -150,6 +169,11 @@ thriftlint --format json path/to/file.thrift
 ### Features currently implemented
 
 - diagnostics (`didOpen` / `didChange` / `didSave` / `didClose`)
+- cross-file workspace diagnostics over workspace folders and open-document shadows
+- go to definition (`textDocument/definition`)
+- find references (`textDocument/references`)
+- rename for indexed top-level declarations (`textDocument/prepareRename`, `textDocument/rename`)
+- workspace symbol search (`workspace/symbol`)
 - document formatting
 - range formatting
 - document symbols
@@ -164,6 +188,20 @@ thriftlint --format json path/to/file.thrift
 - `didChange`: syntax diagnostics are published immediately; lint is debounced and runs on the full file
 - `didSave`: full-file lint runs immediately
 - `didClose`: diagnostics are cleared
+- workspace folders bound a shared lazy workspace index for cross-file diagnostics and navigation; `initialize` and the first `didOpen` do not wait for a whole-root crawl
+- if the client provides no workspace folders, `thriftls` uses the directory of the first opened document as an implicit workspace root
+- `didOpen`, `didChange`, `didSave`, and `didClose` refresh the active document plus its transitive include closure first, then schedule background workspace discovery
+- open unsaved documents shadow on-disk files for diagnostics, definition, references, and rename
+- opportunistic background discovery respects recursive `.gitignore` files and still hard-skips `.git`, `.hg`, `.svn`, `.idea`, and `.vscode`
+- `.gitignore` never hides an open document or an explicitly resolved include target
+- `workspace/didChangeWatchedFiles` and `workspace/didChangeWorkspaceFolders` refresh loaded documents immediately, schedule further background discovery, and republish affected workspace diagnostics
+
+Navigation and refactor behavior under lazy discovery:
+
+- go to definition works as soon as the queried binding is exact inside the currently loaded graph
+- find references fails closed with `workspace discovery incomplete` until background discovery has exact reverse-dependency coverage for the queried symbol
+- rename is also fail-closed on incomplete coverage; `prepareRename` may succeed before rename is allowed
+- workspace symbol search is best-effort over the currently loaded graph and widens as background discovery progresses
 
 Current debounce:
 
@@ -190,18 +228,19 @@ Changed-range lint:
 
 - changed-range lint is experimental only and is not enabled in the shipped/full-file diagnostic path
 
-### Not implemented yet (examples)
+### Still not implemented yet (examples)
 
-- go to definition
-- rename
 - code actions
+- member-level rename for fields, methods, enum members, or annotations
 
 ### Current runtime/configuration notes
 
 - `thriftls` uses a single embedded wasm parser backend
 - there is no supported backend toggle
 - no user-configurable lint rule toggles or parser timeout knobs are exposed yet
-- semantic lint currently resolves only unqualified names declared in the current document; dotted include-qualified references are skipped until cross-file indexing exists
+- workspace indexing uses a bounded parse-worker pool; `--workspace-index-workers` or `thrift.workspace.indexWorkers` controls it, and `0` uses the server default
+- `thriftls` does not perform periodic whole-workspace rescans by default; watched-file updates refresh loaded documents only
+- rename is intentionally fail-closed, currently targets top-level declarations only, and refuses to run until workspace discovery is complete enough to be exact
 - parser cancellation/time limits currently follow the request context; there is no separate configurable hard timeout inside the server
 
 For backend troubleshooting and breaker behavior, see [WASM Runtime and Troubleshooting](/Users/dmytro/work/github/thrift-weaver/docs/wasm-runtime.md).
@@ -248,6 +287,7 @@ Useful settings:
 
 - `thrift.server.path`: path to `thriftls`
 - `thrift.server.args`: extra args for `thriftls`
+- `thrift.workspace.indexWorkers`: maximum parallel workers used for workspace indexing (`0` = server default)
 - `thrift.format.lineWidth`: preferred formatter width (forwarded by extension; server support may evolve)
 - `thrift.trace.server`: LSP trace (`off`, `messages`, `verbose`)
 - `thrift.managedInstall.enabled`: enable/disable managed `thriftls` install
@@ -264,6 +304,10 @@ Extension defaults for Apache Thrift files:
 
 - syntax highlighting (TextMate)
 - diagnostics
+- go to definition
+- find references
+- rename symbol for indexed top-level declarations
+- workspace symbol search
 - format document / format selection
 - document symbols (Outline)
 - folding ranges

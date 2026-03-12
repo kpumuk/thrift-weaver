@@ -8,11 +8,22 @@ func DefaultServerCapabilities() ServerCapabilities {
 			Change:    TextDocumentSyncKindIncremental,
 			Save:      &SaveOptions{IncludeText: false},
 		},
+		DefinitionProvider:              true,
+		DocumentLinkProvider:            true,
+		ReferencesProvider:              true,
+		RenameProvider:                  true,
 		DocumentFormattingProvider:      true,
 		DocumentRangeFormattingProvider: true,
 		DocumentSymbolProvider:          true,
 		FoldingRangeProvider:            true,
 		SelectionRangeProvider:          true,
+		WorkspaceSymbolProvider:         true,
+		Workspace: &WorkspaceServerCapabilities{
+			WorkspaceFolders: &WorkspaceFoldersServerCapabilities{
+				Supported:           true,
+				ChangeNotifications: true,
+			},
+		},
 		SemanticTokensProvider: &SemanticTokensOptions{
 			Legend: SemanticTokensLegend{
 				TokenTypes:     semanticTokenLegendTypes(),

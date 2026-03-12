@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	fmtengine "github.com/kpumuk/thrift-weaver/internal/format"
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/lint"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
@@ -22,6 +25,8 @@ import (
 type Server struct {
 	store *SnapshotStore
 	lint  *lint.Runner
+
+	workspaceIndexWorkers int
 
 	mu            sync.Mutex
 	shutdown      bool
@@ -39,6 +44,21 @@ type Server struct {
 	lintDebounce time.Duration
 	lintJobs     map[string]lintJobState
 	lintWG       sync.WaitGroup
+
+	workspaceMu               sync.Mutex
+	workspace                 *index.Manager
+	workspaceHooks            index.Hooks
+	workspaceRoots            []string
+	workspaceDiscoveryMu      sync.Mutex
+	workspaceDiscoveryRunning bool
+	workspaceDiscoveryQueued  bool
+	workspaceDiscoveryReason  index.RebuildReason
+	workspaceLintMu           sync.Mutex
+	workspaceLintJobs         map[string]lintJobState
+	workspaceLintWG           sync.WaitGroup
+
+	diagMu      sync.Mutex
+	diagnostics map[string]documentDiagnostics
 }
 
 type lintJobState struct {
@@ -47,17 +67,51 @@ type lintJobState struct {
 	cancel     context.CancelFunc
 }
 
+type diagnosticBucket string
+
+const (
+	diagnosticBucketParser    diagnosticBucket = "parser"
+	diagnosticBucketLocal     diagnosticBucket = "local"
+	diagnosticBucketWorkspace diagnosticBucket = "workspace"
+)
+
+type diagnosticBucketState struct {
+	set         bool
+	version     int32
+	generation  uint64
+	diagnostics []Diagnostic
+}
+
+type documentDiagnostics struct {
+	parser    diagnosticBucketState
+	local     diagnosticBucketState
+	workspace diagnosticBucketState
+}
+
 const defaultLintDebounce = 150 * time.Millisecond
+
+// Options configures process-wide LSP server behavior.
+type Options struct {
+	WorkspaceIndexWorkers int
+}
 
 // NewServer creates a new LSP server instance.
 func NewServer() *Server {
+	return NewServerWithOptions(Options{})
+}
+
+// NewServerWithOptions creates a new LSP server instance with explicit options.
+func NewServerWithOptions(opts Options) *Server {
 	return &Server{
-		store:            NewSnapshotStore(),
-		lint:             lint.NewDefaultRunner(),
-		requestCancels:   make(map[string]context.CancelFunc),
-		pendingCancelled: make(map[string]struct{}),
-		lintDebounce:     defaultLintDebounce,
-		lintJobs:         make(map[string]lintJobState),
+		store:                 NewSnapshotStore(),
+		lint:                  lint.NewDefaultRunner(),
+		workspaceIndexWorkers: opts.WorkspaceIndexWorkers,
+		requestCancels:        make(map[string]context.CancelFunc),
+		pendingCancelled:      make(map[string]struct{}),
+		lintDebounce:          defaultLintDebounce,
+		lintJobs:              make(map[string]lintJobState),
+		workspaceLintJobs:     make(map[string]lintJobState),
+		diagnostics:           make(map[string]documentDiagnostics),
 	}
 }
 
@@ -83,6 +137,9 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	defer func() {
 		s.cancelAllLintJobs()
 		s.lintWG.Wait()
+		s.cancelAllWorkspaceLintJobs()
+		s.workspaceLintWG.Wait()
+		s.closeWorkspaceManager()
 		s.detachRuntime()
 	}()
 
@@ -178,6 +235,24 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 		}
 		s.cancelRequest(p)
 		return nil
+	case "workspace/didChangeWorkspaceFolders":
+		var p DidChangeWorkspaceFoldersParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		if err := s.DidChangeWorkspaceFolders(ctx, p); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
+		return nil
+	case "workspace/didChangeWatchedFiles":
+		var p DidChangeWatchedFilesParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		if err := s.DidChangeWatchedFiles(ctx, p); err != nil {
+			return writeErr(jsonRPCInternalError, err.Error())
+		}
+		return nil
 	case "textDocument/didOpen":
 		var p DidOpenParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -187,9 +262,11 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		s.invalidateLintJob(p.TextDocument.URI)
+		s.invalidateWorkspaceLintJob(p.TextDocument.URI)
 		if err := s.publishDiagnosticsForURI(ctx, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
+		s.scheduleWorkspaceLintPublishForImpactedURI(p.TextDocument.URI)
 		return nil
 	case "textDocument/didChange":
 		var p DidChangeParams
@@ -212,6 +289,7 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		s.scheduleLintPublishForURI(p.TextDocument.URI)
+		s.scheduleWorkspaceLintPublishForImpactedURI(p.TextDocument.URI)
 		return nil
 	case "textDocument/didSave":
 		var p DidSaveParams
@@ -222,9 +300,11 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		s.invalidateLintJob(p.TextDocument.URI)
+		s.invalidateWorkspaceLintJob(p.TextDocument.URI)
 		if err := s.publishDiagnosticsForURI(ctx, p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
+		s.scheduleWorkspaceLintPublishForImpactedURI(p.TextDocument.URI)
 		return nil
 	case "textDocument/didClose":
 		var p DidCloseParams
@@ -235,9 +315,11 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
 		s.invalidateLintJob(p.TextDocument.URI)
+		s.invalidateWorkspaceLintJob(p.TextDocument.URI)
 		if err := s.publishClearedDiagnostics(p.TextDocument.URI); err != nil {
 			return writeErr(jsonRPCInternalError, err.Error())
 		}
+		s.scheduleWorkspaceLintPublishForImpactedURI(p.TextDocument.URI)
 		return nil
 	case "textDocument/formatting":
 		var p DocumentFormattingParams
@@ -259,6 +341,56 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(lspErrorCodeForFormatting(err), err.Error())
 		}
 		return writeResp(edits)
+	case "textDocument/definition":
+		var p DefinitionParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		locations, err := s.Definition(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(locations)
+	case "textDocument/documentLink":
+		var p DocumentLinkParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		links, err := s.DocumentLinks(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(links)
+	case "textDocument/references":
+		var p ReferenceParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		locations, err := s.References(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(locations)
+	case "textDocument/prepareRename":
+		var p PrepareRenameParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		result, err := s.PrepareRename(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(result)
+	case "textDocument/rename":
+		var p RenameParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		edit, err := s.Rename(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(edit)
 	case "textDocument/documentSymbol":
 		var p DocumentSymbolParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -299,6 +431,16 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 			return writeErr(lspErrorCodeForQuery(err), err.Error())
 		}
 		return writeResp(tokens)
+	case "workspace/symbol":
+		var p WorkspaceSymbolParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return writeErr(jsonRPCInvalidParams, err.Error())
+		}
+		symbols, err := s.WorkspaceSymbols(ctx, p)
+		if err != nil {
+			return writeErr(lspErrorCodeForQuery(err), err.Error())
+		}
+		return writeResp(symbols)
 	default:
 		return writeErr(jsonRPCMethodNotFound, "method not found")
 	}
@@ -306,8 +448,9 @@ func (s *Server) dispatch(ctx context.Context, req Request) error {
 
 // Initialize handles the LSP initialize request.
 func (s *Server) Initialize(ctx context.Context, p InitializeParams) (InitializeResult, error) {
-	_ = ctx
-	_ = p
+	if err := s.configureWorkspaceFolders(ctx, p.WorkspaceFolders); err != nil {
+		return InitializeResult{}, err
+	}
 	return InitializeResult{Capabilities: DefaultServerCapabilities()}, nil
 }
 
@@ -335,39 +478,93 @@ func (s *Server) Exit() {
 
 // DidOpen parses and stores the opened document snapshot.
 func (s *Server) DidOpen(ctx context.Context, p DidOpenParams) error {
-	store, err := s.requireStore()
+	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
 	}
-	_, err = store.Open(ctx, p.TextDocument.URI, p.TextDocument.Version, []byte(p.TextDocument.Text))
-	return err
+	if _, err := store.Open(ctx, uri, p.TextDocument.Version, []byte(p.TextDocument.Text)); err != nil {
+		return err
+	}
+	return s.syncWorkspaceDocumentWithReason(ctx, uri, index.RebuildReasonOpen)
 }
 
 // DidChange applies text changes and stores the reparsed snapshot.
 func (s *Server) DidChange(ctx context.Context, p DidChangeParams) error {
-	store, err := s.requireStore()
+	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
 	}
-	_, err = store.Change(ctx, p.TextDocument.URI, p.TextDocument.Version, p.ContentChanges)
-	return err
+	if _, err := store.Change(ctx, uri, p.TextDocument.Version, p.ContentChanges); err != nil {
+		return err
+	}
+	return s.syncWorkspaceDocumentWithReason(ctx, uri, index.RebuildReasonChange)
 }
 
-// DidSave handles didSave notifications. v1 performs no extra state mutation.
+// DidSave refreshes the workspace view after a save while preserving the open-document shadow.
 func (s *Server) DidSave(ctx context.Context, p DidSaveParams) error {
-	_ = ctx
-	_ = p
-	return nil
+	manager := s.workspaceManager()
+	if manager == nil {
+		return nil
+	}
+	return s.syncWorkspaceDocumentWithReason(ctx, p.TextDocument.URI, index.RebuildReasonChange)
 }
 
 // DidClose removes the document snapshot if present.
 func (s *Server) DidClose(ctx context.Context, p DidCloseParams) error {
-	_ = ctx
-	store, err := s.requireStore()
+	store, uri, err := s.storeForDocumentURI(p.TextDocument.URI)
 	if err != nil {
 		return err
 	}
-	store.Close(p.TextDocument.URI)
+	store.Close(uri)
+	if manager := s.workspaceManager(); manager != nil {
+		if err := manager.CloseOpenDocumentWithReason(ctx, uri, index.RebuildReasonClose); err != nil {
+			return err
+		}
+		if err := manager.RefreshOpenDocumentClosureWithReason(ctx, index.RebuildReasonClose); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DidChangeWorkspaceFolders updates the configured workspace roots.
+func (s *Server) DidChangeWorkspaceFolders(ctx context.Context, p DidChangeWorkspaceFoldersParams) error {
+	current := s.workspaceRootsSnapshot()
+	removed, err := workspaceRootsFromFolders(p.Event.Removed)
+	if err != nil {
+		return err
+	}
+	added, err := workspaceRootsFromFolders(p.Event.Added)
+	if err != nil {
+		return err
+	}
+	next := updatedWorkspaceRoots(current, removed, added)
+
+	if len(next) == 0 {
+		s.closeWorkspaceManager()
+		return nil
+	}
+	if err := s.configureWorkspaceManager(ctx, next); err != nil {
+		return err
+	}
+	s.scheduleWorkspaceLintPublishForAllOpenDocuments()
+	return nil
+}
+
+// DidChangeWatchedFiles refreshes the workspace index from filesystem watcher events.
+func (s *Server) DidChangeWatchedFiles(ctx context.Context, p DidChangeWatchedFilesParams) error {
+	manager := s.workspaceManager()
+	if manager == nil {
+		return nil
+	}
+
+	for _, change := range p.Changes {
+		deleted := change.Type == FileChangeTypeDeleted
+		if err := manager.RefreshDocumentWithReason(ctx, change.URI, deleted, index.RebuildReasonWatch); err != nil {
+			return err
+		}
+	}
+	s.scheduleWorkspaceLintPublishForAllOpenDocuments()
 	return nil
 }
 
@@ -434,6 +631,270 @@ func (s *Server) requireStore() (*SnapshotStore, error) {
 	return s.store, nil
 }
 
+func (s *Server) storeForDocumentURI(raw string) (*SnapshotStore, string, error) {
+	store, err := s.requireStore()
+	if err != nil {
+		return nil, "", err
+	}
+	uri, err := canonicalDocumentURI(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	return store, uri, nil
+}
+
+func (s *Server) configureWorkspaceFolders(ctx context.Context, folders []WorkspaceFolder) error {
+	roots, err := workspaceRootsFromFolders(folders)
+	if err != nil {
+		return err
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	return s.configureWorkspaceManager(ctx, roots)
+}
+
+func (s *Server) configureWorkspaceManager(ctx context.Context, roots []string) error {
+	manager := index.NewManager(index.Options{
+		WorkspaceRoots: roots,
+		ParseWorkers:   s.workspaceIndexWorkers,
+		Hooks:          s.workspaceIndexHooks(),
+	})
+	keepManager := false
+	defer func() {
+		if !keepManager {
+			manager.Close()
+		}
+	}()
+
+	store, err := s.requireStore()
+	if err != nil {
+		return err
+	}
+	for _, snap := range store.Snapshots() {
+		if err := manager.UpsertOpenDocumentWithReason(ctx, workspaceDocumentInput(snap), index.RebuildReasonOpen); err != nil {
+			return err
+		}
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, index.RebuildReasonManualRescan); err != nil {
+		return err
+	}
+
+	s.workspaceMu.Lock()
+	old := s.workspace
+	s.workspace = manager
+	s.workspaceRoots = slices.Clone(roots)
+	s.workspaceMu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	keepManager = true
+	return nil
+}
+
+func (s *Server) workspaceManager() *index.Manager {
+	if s == nil {
+		return nil
+	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	return s.workspace
+}
+
+func (s *Server) workspaceIndexHooks() index.Hooks {
+	if s == nil {
+		return index.Hooks{}
+	}
+	s.workspaceMu.Lock()
+	hooks := s.workspaceHooks
+	s.workspaceMu.Unlock()
+	hooks.QueueDepth = s.workspaceDiscoveryQueueDepth
+	return hooks
+}
+
+func (s *Server) closeWorkspaceManager() {
+	if s == nil {
+		return
+	}
+	s.workspaceMu.Lock()
+	manager := s.workspace
+	s.workspace = nil
+	s.workspaceRoots = nil
+	s.workspaceMu.Unlock()
+	if manager != nil {
+		manager.Close()
+	}
+}
+
+func (s *Server) workspaceRootsSnapshot() []string {
+	if s == nil {
+		return nil
+	}
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	return slices.Clone(s.workspaceRoots)
+}
+
+func updatedWorkspaceRoots(current, removed, added []string) []string {
+	next := make([]string, 0, len(current)+len(added))
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, root := range removed {
+		removedSet[root] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(current)+len(added))
+	appendUnique := func(root string) {
+		if _, ok := seen[root]; ok {
+			return
+		}
+		seen[root] = struct{}{}
+		next = append(next, root)
+	}
+
+	for _, root := range current {
+		if _, ok := removedSet[root]; ok {
+			continue
+		}
+		appendUnique(root)
+	}
+	for _, root := range added {
+		appendUnique(root)
+	}
+	return next
+}
+
+func (s *Server) ensureWorkspaceManagerForURI(ctx context.Context, uri string) (*index.Manager, error) {
+	if manager := s.workspaceManager(); manager != nil {
+		return manager, nil
+	}
+
+	root, err := documentRootFromURI(uri)
+	if err != nil {
+		return nil, err
+	}
+	if !shouldUseImplicitWorkspaceRoot(root) {
+		return nil, nil
+	}
+	if err := s.configureWorkspaceManager(ctx, []string{root}); err != nil {
+		return nil, err
+	}
+	return s.workspaceManager(), nil
+}
+
+func (s *Server) syncWorkspaceDocumentWithReason(ctx context.Context, uri string, reason index.RebuildReason) error {
+	manager, err := s.ensureWorkspaceManagerForURI(ctx, uri)
+	if err != nil || manager == nil {
+		return err
+	}
+
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if snap == nil {
+		return nil
+	}
+	if err := manager.UpsertOpenDocumentWithReason(ctx, workspaceDocumentInput(snap), reason); err != nil {
+		return err
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(ctx, reason); err != nil {
+		return err
+	}
+	s.maybeScheduleWorkspaceDiscovery(manager, reason)
+	return nil
+}
+
+func (s *Server) maybeScheduleWorkspaceDiscovery(manager *index.Manager, reason index.RebuildReason) {
+	if !s.shouldScheduleWorkspaceDiscovery(manager, reason) {
+		return
+	}
+	s.scheduleWorkspaceDiscovery(reason)
+}
+
+func (s *Server) shouldScheduleWorkspaceDiscovery(manager *index.Manager, reason index.RebuildReason) bool {
+	if manager == nil {
+		return false
+	}
+	if reason == index.RebuildReasonManualRescan {
+		return true
+	}
+	if reason != index.RebuildReasonOpen {
+		return false
+	}
+	snapshot, ok := manager.Snapshot()
+	return !ok || snapshot == nil || !snapshot.DiscoveryComplete
+}
+
+func (s *Server) scheduleWorkspaceDiscovery(reason index.RebuildReason) {
+	if s == nil {
+		return
+	}
+
+	s.workspaceDiscoveryMu.Lock()
+	s.workspaceDiscoveryReason = reason
+	if s.workspaceDiscoveryRunning {
+		s.workspaceDiscoveryQueued = true
+		s.workspaceDiscoveryMu.Unlock()
+		return
+	}
+	s.workspaceDiscoveryRunning = true
+	s.workspaceDiscoveryQueued = false
+	s.workspaceDiscoveryMu.Unlock()
+
+	go s.runWorkspaceDiscoveryLoop()
+}
+
+func (s *Server) runWorkspaceDiscoveryLoop() {
+	for {
+		manager := s.workspaceManager()
+		if manager != nil {
+			reason := s.workspaceDiscoveryReasonSnapshot()
+			if s.shouldRescanWorkspace(manager, reason) {
+				_ = manager.RescanWorkspaceWithReason(context.Background(), reason)
+				s.scheduleWorkspaceLintPublishForAllOpenDocuments()
+			}
+		}
+
+		s.workspaceDiscoveryMu.Lock()
+		if !s.workspaceDiscoveryQueued {
+			s.workspaceDiscoveryRunning = false
+			s.workspaceDiscoveryMu.Unlock()
+			return
+		}
+		s.workspaceDiscoveryQueued = false
+		s.workspaceDiscoveryMu.Unlock()
+	}
+}
+
+func (s *Server) workspaceDiscoveryReasonSnapshot() index.RebuildReason {
+	s.workspaceDiscoveryMu.Lock()
+	defer s.workspaceDiscoveryMu.Unlock()
+	return s.workspaceDiscoveryReason
+}
+
+func (s *Server) shouldRescanWorkspace(manager *index.Manager, reason index.RebuildReason) bool {
+	if manager == nil {
+		return false
+	}
+	if reason == index.RebuildReasonManualRescan {
+		return true
+	}
+	snapshot, ok := manager.Snapshot()
+	return ok && snapshot != nil && !snapshot.DiscoveryComplete
+}
+
+func (s *Server) workspaceDiscoveryQueueDepth() int {
+	if s == nil {
+		return 0
+	}
+	s.workspaceDiscoveryMu.Lock()
+	defer s.workspaceDiscoveryMu.Unlock()
+	if !s.workspaceDiscoveryQueued {
+		return 0
+	}
+	return 1
+}
+
 func (s *Server) latestSnapshot(uri string) (*Snapshot, error) {
 	store, err := s.requireStore()
 	if err != nil {
@@ -466,11 +927,25 @@ func (s *Server) publishDiagnosticsForURI(ctx context.Context, uri string) error
 	if snap == nil {
 		return nil
 	}
-	diags, err := s.collectLSPDiagnostics(ctx, snap.Tree)
+	parserDiags, err := lspDiagnosticsFromSyntax(snap.Tree, slices.Clone(snap.Tree.Diagnostics))
 	if err != nil {
 		return err
 	}
-	return s.writeVersionedDiagnostics(uri, snap.Version, snap.Generation, diags)
+	localSyntaxDiags, err := s.collectLocalLintDiagnostics(ctx, snap.Tree)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		localSyntaxDiags = nil
+	}
+	localDiags, err := lspDiagnosticsFromSyntax(snap.Tree, localSyntaxDiags)
+	if err != nil {
+		return err
+	}
+	return s.replaceDiagnosticBuckets(
+		snap.URI,
+		snap.Version,
+		snap.Generation,
+		diagnosticBucketUpdate{bucket: diagnosticBucketParser, diagnostics: parserDiags},
+		diagnosticBucketUpdate{bucket: diagnosticBucketLocal, diagnostics: localDiags},
+	)
 }
 
 func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
@@ -486,29 +961,71 @@ func (s *Server) publishSyntaxDiagnosticsForURI(uri string) error {
 	if err != nil {
 		return err
 	}
-	return s.writeVersionedDiagnostics(uri, snap.Version, snap.Generation, diags)
+	return s.replaceDiagnosticBuckets(
+		snap.URI,
+		snap.Version,
+		snap.Generation,
+		diagnosticBucketUpdate{bucket: diagnosticBucketParser, diagnostics: diags},
+	)
 }
 
-func (s *Server) collectLSPDiagnostics(ctx context.Context, tree *syntax.Tree) ([]Diagnostic, error) {
+func (s *Server) collectLocalLintDiagnostics(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagnostic, error) {
 	if tree == nil {
 		return nil, errors.New("nil syntax tree")
 	}
-	combined := slices.Clone(tree.Diagnostics)
 	if s == nil || s.lint == nil {
-		return lspDiagnosticsFromSyntax(tree, combined)
+		return []syntax.Diagnostic{}, nil
 	}
 
 	lintDiags, err := s.lint.Run(ctx, tree)
 	if err != nil {
-		return lspDiagnosticsFromSyntax(tree, combined)
+		return nil, err
 	}
-	combined = append(combined, lintDiags...)
+	lint.SortDiagnostics(lintDiags)
+	return lintDiags, nil
+}
 
-	lint.SortDiagnostics(combined)
-	return lspDiagnosticsFromSyntax(tree, combined)
+func (s *Server) collectWorkspaceLintDiagnostics(ctx context.Context, uri string, version int32, generation uint64) ([]Diagnostic, error) {
+	if s == nil || s.lint == nil {
+		return []Diagnostic{}, nil
+	}
+
+	manager := s.workspaceManager()
+	if manager == nil {
+		return []Diagnostic{}, nil
+	}
+	workspaceSnapshot, ok := manager.Snapshot()
+	if !ok {
+		return []Diagnostic{}, nil
+	}
+	view, ok, err := index.ViewForDocument(workspaceSnapshot, uri)
+	if err != nil || !ok {
+		return []Diagnostic{}, err
+	}
+	if view.Document.Version != version || view.Document.Generation != generation {
+		return []Diagnostic{}, nil
+	}
+
+	snap, err := s.latestSnapshot(uri)
+	if err != nil || !snapshotMatchesVersion(snap, version, generation) {
+		return []Diagnostic{}, err
+	}
+
+	workspaceDiags, err := s.lint.RunWithWorkspace(ctx, view)
+	if err != nil {
+		return nil, err
+	}
+	return lspDiagnosticsFromSyntax(snap.Tree, workspaceDiags)
 }
 
 func (s *Server) publishClearedDiagnostics(uri string) error {
+	uri, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return err
+	}
+	s.diagMu.Lock()
+	delete(s.diagnostics, uri)
+	s.diagMu.Unlock()
 	return s.writePublishDiagnostics(PublishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: []Diagnostic{},
@@ -541,10 +1058,132 @@ func (s *Server) writeVersionedDiagnostics(uri string, version int32, generation
 	}
 
 	return s.writePublishDiagnostics(PublishDiagnosticsParams{
-		URI:         uri,
+		URI:         snap.URI,
 		Version:     &version,
 		Diagnostics: diags,
 	})
+}
+
+type diagnosticBucketUpdate struct {
+	bucket      diagnosticBucket
+	diagnostics []Diagnostic
+}
+
+func (s *Server) replaceDiagnosticBuckets(uri string, version int32, generation uint64, updates ...diagnosticBucketUpdate) error {
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if !snapshotMatchesVersion(snap, version, generation) {
+		return nil
+	}
+
+	s.diagMu.Lock()
+	state := s.diagnostics[snap.URI]
+	changed := false
+	for _, update := range updates {
+		if sameDiagnosticBucket(state.bucket(update.bucket), version, generation, update.diagnostics) {
+			continue
+		}
+		state.setBucket(update.bucket, diagnosticBucketState{
+			set:         true,
+			version:     version,
+			generation:  generation,
+			diagnostics: slices.Clone(update.diagnostics),
+		})
+		changed = true
+	}
+	if !changed {
+		s.diagMu.Unlock()
+		return nil
+	}
+	s.diagnostics[snap.URI] = state
+	merged := mergeDiagnosticBuckets(state, version, generation)
+	s.diagMu.Unlock()
+	return s.writeVersionedDiagnostics(snap.URI, version, generation, merged)
+}
+
+func (d documentDiagnostics) bucket(kind diagnosticBucket) diagnosticBucketState {
+	switch kind {
+	case diagnosticBucketParser:
+		return d.parser
+	case diagnosticBucketLocal:
+		return d.local
+	case diagnosticBucketWorkspace:
+		return d.workspace
+	default:
+		return diagnosticBucketState{}
+	}
+}
+
+func (d *documentDiagnostics) setBucket(kind diagnosticBucket, state diagnosticBucketState) {
+	switch kind {
+	case diagnosticBucketParser:
+		d.parser = state
+	case diagnosticBucketLocal:
+		d.local = state
+	case diagnosticBucketWorkspace:
+		d.workspace = state
+	}
+}
+
+func sameDiagnosticBucket(state diagnosticBucketState, version int32, generation uint64, diags []Diagnostic) bool {
+	if !state.set {
+		return false
+	}
+	return state.version == version && state.generation == generation && slices.Equal(state.diagnostics, diags)
+}
+
+func mergeDiagnosticBuckets(state documentDiagnostics, version int32, generation uint64) []Diagnostic {
+	out := make([]Diagnostic, 0, len(state.parser.diagnostics)+len(state.local.diagnostics)+len(state.workspace.diagnostics))
+	appendBucketDiagnostics(&out, state.parser, version, generation)
+	appendBucketDiagnostics(&out, state.local, version, generation)
+	appendBucketDiagnostics(&out, state.workspace, version, generation)
+	slices.SortFunc(out, compareDiagnostics)
+	return out
+}
+
+func appendBucketDiagnostics(out *[]Diagnostic, state diagnosticBucketState, version int32, generation uint64) {
+	if !state.set || state.version != version || state.generation != generation {
+		return
+	}
+	*out = append(*out, state.diagnostics...)
+}
+
+func compareDiagnostics(a, b Diagnostic) int {
+	if cmp := comparePosition(a.Range.Start, b.Range.Start); cmp != 0 {
+		return cmp
+	}
+	if cmp := comparePosition(a.Range.End, b.Range.End); cmp != 0 {
+		return cmp
+	}
+	if a.Severity != b.Severity {
+		return a.Severity - b.Severity
+	}
+	if a.Source != b.Source {
+		return strings.Compare(a.Source, b.Source)
+	}
+	if a.Code != b.Code {
+		return strings.Compare(a.Code, b.Code)
+	}
+	return strings.Compare(a.Message, b.Message)
+}
+
+func comparePosition(a, b Position) int {
+	if a.Line != b.Line {
+		return a.Line - b.Line
+	}
+	return a.Character - b.Character
+}
+
+func (s *Server) hasDiagnosticBucket(uri string, bucket diagnosticBucket) bool {
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return false
+	}
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	return s.diagnostics[canonicalURI].bucket(bucket).set
 }
 
 func (s *Server) writeMessage(body []byte) error {
@@ -587,8 +1226,12 @@ func (s *Server) scheduleLintPublishForURI(uri string) {
 	if s == nil || s.lint == nil || uri == "" {
 		return
 	}
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return
+	}
 
-	snap, err := s.latestSnapshot(uri)
+	snap, err := s.latestSnapshot(canonicalURI)
 	if err != nil || snap == nil {
 		return
 	}
@@ -603,17 +1246,17 @@ func (s *Server) scheduleLintPublishForURI(uri string) {
 	ctx, cancel := context.WithCancel(runCtx)
 
 	s.lintMu.Lock()
-	if state := s.lintJobs[uri]; state.cancel != nil {
+	if state := s.lintJobs[canonicalURI]; state.cancel != nil {
 		state.cancel()
 	}
-	s.lintJobs[uri] = lintJobState{version: version, generation: generation, cancel: cancel}
+	s.lintJobs[canonicalURI] = lintJobState{version: version, generation: generation, cancel: cancel}
 	debounce := s.lintDebounce
 	s.lintWG.Add(1)
 	s.lintMu.Unlock()
 
 	go func() {
 		defer s.lintWG.Done()
-		defer s.finishLintJob(uri, version, generation)
+		defer s.finishLintJob(canonicalURI, version, generation)
 
 		timer := time.NewTimer(debounce)
 		defer timer.Stop()
@@ -624,10 +1267,10 @@ func (s *Server) scheduleLintPublishForURI(uri string) {
 		case <-timer.C:
 		}
 
-		if !s.isLintJobCurrent(uri, version, generation) {
+		if !s.isLintJobCurrent(canonicalURI, version, generation) {
 			return
 		}
-		_ = s.publishDebouncedLintDiagnostics(ctx, uri, version, generation)
+		_ = s.publishDebouncedLintDiagnostics(ctx, canonicalURI, version, generation)
 	}()
 }
 
@@ -640,7 +1283,157 @@ func (s *Server) publishDebouncedLintDiagnostics(ctx context.Context, uri string
 		return nil
 	}
 
-	diags, err := s.collectLSPDiagnostics(ctx, snap.Tree)
+	localSyntaxDiags, err := s.collectLocalLintDiagnostics(ctx, snap.Tree)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	}
+	diags, err := lspDiagnosticsFromSyntax(snap.Tree, localSyntaxDiags)
+	if err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !s.isLintJobCurrent(uri, version, generation) {
+		return nil
+	}
+	return s.replaceDiagnosticBuckets(
+		uri,
+		version,
+		generation,
+		diagnosticBucketUpdate{bucket: diagnosticBucketLocal, diagnostics: diags},
+	)
+}
+
+func (s *Server) invalidateLintJob(uri string) {
+	if s == nil || uri == "" {
+		return
+	}
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return
+	}
+
+	s.lintMu.Lock()
+	defer s.lintMu.Unlock()
+
+	if state := s.lintJobs[canonicalURI]; state.cancel != nil {
+		state.cancel()
+	}
+	delete(s.lintJobs, canonicalURI)
+}
+
+func (s *Server) scheduleWorkspaceLintPublishForURI(uri string) {
+	if s == nil || s.lint == nil || uri == "" {
+		return
+	}
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return
+	}
+
+	snap, err := s.latestSnapshot(canonicalURI)
+	if err != nil || snap == nil {
+		return
+	}
+	version := snap.Version
+	generation := snap.Generation
+
+	runCtx := s.runtimeContext()
+	if runCtx == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(runCtx)
+
+	s.workspaceLintMu.Lock()
+	if state := s.workspaceLintJobs[canonicalURI]; state.cancel != nil {
+		state.cancel()
+	}
+	s.workspaceLintJobs[canonicalURI] = lintJobState{version: version, generation: generation, cancel: cancel}
+	debounce := s.lintDebounce
+	s.workspaceLintWG.Add(1)
+	s.workspaceLintMu.Unlock()
+
+	go func() {
+		defer s.workspaceLintWG.Done()
+		defer s.finishWorkspaceLintJob(canonicalURI, version, generation)
+
+		timer := time.NewTimer(debounce)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		if !s.isWorkspaceLintJobCurrent(canonicalURI, version, generation) {
+			return
+		}
+		_ = s.publishWorkspaceLintDiagnostics(ctx, canonicalURI, version, generation)
+	}()
+}
+
+func (s *Server) scheduleWorkspaceLintPublishForImpactedURI(uri string) {
+	s.scheduleWorkspaceLintPublishForURI(uri)
+
+	manager := s.workspaceManager()
+	if manager == nil {
+		return
+	}
+	workspaceSnapshot, ok := manager.Snapshot()
+	if !ok {
+		return
+	}
+	_, key, err := index.CanonicalizeDocumentURI(uri)
+	if err != nil {
+		return
+	}
+	impacted := make(map[index.DocumentKey]struct{}, len(workspaceSnapshot.ReverseDeps[key])+1)
+	impacted[key] = struct{}{}
+	for _, dep := range workspaceSnapshot.ReverseDeps[key] {
+		impacted[dep] = struct{}{}
+	}
+
+	store, err := s.requireStore()
+	if err != nil {
+		return
+	}
+	for _, snap := range store.Snapshots() {
+		_, snapKey, err := index.CanonicalizeDocumentURI(snap.URI)
+		if err != nil {
+			continue
+		}
+		if _, ok := impacted[snapKey]; !ok {
+			continue
+		}
+		if snap.URI == uri {
+			continue
+		}
+		s.scheduleWorkspaceLintPublishForURI(snap.URI)
+	}
+}
+
+func (s *Server) scheduleWorkspaceLintPublishForAllOpenDocuments() {
+	store, err := s.requireStore()
+	if err != nil {
+		return
+	}
+	for _, snap := range store.Snapshots() {
+		s.scheduleWorkspaceLintPublishForURI(snap.URI)
+	}
+}
+
+func (s *Server) publishWorkspaceLintDiagnostics(ctx context.Context, uri string, version int32, generation uint64) error {
+	if !s.isWorkspaceLintJobCurrent(uri, version, generation) {
+		return nil
+	}
+
+	diags, err := s.collectWorkspaceLintDiagnostics(ctx, uri, version, generation)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -650,24 +1443,18 @@ func (s *Server) publishDebouncedLintDiagnostics(ctx context.Context, uri string
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if !s.isLintJobCurrent(uri, version, generation) {
+	if !s.isWorkspaceLintJobCurrent(uri, version, generation) {
 		return nil
 	}
-	return s.writeVersionedDiagnostics(uri, version, generation, diags)
-}
-
-func (s *Server) invalidateLintJob(uri string) {
-	if s == nil || uri == "" {
-		return
+	if len(diags) == 0 && !s.hasDiagnosticBucket(uri, diagnosticBucketWorkspace) {
+		return nil
 	}
-
-	s.lintMu.Lock()
-	defer s.lintMu.Unlock()
-
-	if state := s.lintJobs[uri]; state.cancel != nil {
-		state.cancel()
-	}
-	delete(s.lintJobs, uri)
+	return s.replaceDiagnosticBuckets(
+		uri,
+		version,
+		generation,
+		diagnosticBucketUpdate{bucket: diagnosticBucketWorkspace, diagnostics: diags},
+	)
 }
 
 func (s *Server) finishLintJob(uri string, version int32, generation uint64) {
@@ -698,8 +1485,119 @@ func (s *Server) isLintJobCurrent(uri string, version int32, generation uint64) 
 	return ok && state.version == version && state.generation == generation
 }
 
+func (s *Server) invalidateWorkspaceLintJob(uri string) {
+	if s == nil || uri == "" {
+		return
+	}
+	canonicalURI, err := canonicalDocumentURI(uri)
+	if err != nil {
+		return
+	}
+
+	s.workspaceLintMu.Lock()
+	defer s.workspaceLintMu.Unlock()
+
+	if state := s.workspaceLintJobs[canonicalURI]; state.cancel != nil {
+		state.cancel()
+	}
+	delete(s.workspaceLintJobs, canonicalURI)
+}
+
+func (s *Server) finishWorkspaceLintJob(uri string, version int32, generation uint64) {
+	if s == nil || uri == "" {
+		return
+	}
+
+	s.workspaceLintMu.Lock()
+	defer s.workspaceLintMu.Unlock()
+
+	state, ok := s.workspaceLintJobs[uri]
+	if !ok || state.version != version || state.generation != generation {
+		return
+	}
+	state.cancel = nil
+	s.workspaceLintJobs[uri] = state
+}
+
+func (s *Server) isWorkspaceLintJobCurrent(uri string, version int32, generation uint64) bool {
+	if s == nil || uri == "" {
+		return false
+	}
+
+	s.workspaceLintMu.Lock()
+	defer s.workspaceLintMu.Unlock()
+
+	state, ok := s.workspaceLintJobs[uri]
+	return ok && state.version == version && state.generation == generation
+}
+
 func snapshotMatchesVersion(snap *Snapshot, version int32, generation uint64) bool {
 	return snap != nil && snap.Version == version && snap.Generation == generation
+}
+
+func workspaceDocumentInput(snap *Snapshot) index.DocumentInput {
+	if snap == nil {
+		return index.DocumentInput{}
+	}
+	return index.DocumentInput{
+		URI:        snap.URI,
+		Version:    snap.Version,
+		Generation: snap.Generation,
+		Source:     snap.Bytes(),
+	}
+}
+
+func canonicalDocumentURI(raw string) (string, error) {
+	displayURI, _, err := index.CanonicalizeDocumentURI(raw)
+	if err != nil {
+		return "", err
+	}
+	return displayURI, nil
+}
+
+func workspaceRootsFromFolders(folders []WorkspaceFolder) ([]string, error) {
+	roots := make([]string, 0, len(folders))
+	seen := make(map[string]struct{}, len(folders))
+	for _, folder := range folders {
+		root, err := documentRootFromURI(folder.URI)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	return roots, nil
+}
+
+func documentRootFromURI(raw string) (string, error) {
+	path, err := filePathFromDocumentURI(raw)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(path), nil
+}
+
+func shouldUseImplicitWorkspaceRoot(root string) bool {
+	root = filepath.Clean(root)
+	return root != filepath.Dir(root)
+}
+
+func filePathFromDocumentURI(raw string) (string, error) {
+	displayURI, err := canonicalDocumentURI(raw)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(displayURI)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "file" {
+		return "", fmt.Errorf("unsupported URI scheme %q", u.Scheme)
+	}
+	return filepath.Clean(filepath.FromSlash(u.Path)), nil
 }
 
 func (s *Server) cancelAllLintJobs() {
@@ -718,6 +1616,22 @@ func (s *Server) cancelAllLintJobs() {
 	clear(s.lintJobs)
 }
 
+func (s *Server) cancelAllWorkspaceLintJobs() {
+	if s == nil {
+		return
+	}
+
+	s.workspaceLintMu.Lock()
+	defer s.workspaceLintMu.Unlock()
+
+	for _, state := range s.workspaceLintJobs {
+		if state.cancel != nil {
+			state.cancel()
+		}
+	}
+	clear(s.workspaceLintJobs)
+}
+
 func (s *Server) setLintDebounceForTesting(d time.Duration) {
 	if d < 0 {
 		d = 0
@@ -725,6 +1639,15 @@ func (s *Server) setLintDebounceForTesting(d time.Duration) {
 	s.lintMu.Lock()
 	s.lintDebounce = d
 	s.lintMu.Unlock()
+}
+
+func (s *Server) setWorkspaceHooksForTesting(hooks index.Hooks) {
+	if s == nil {
+		return
+	}
+	s.workspaceMu.Lock()
+	s.workspaceHooks = hooks
+	s.workspaceMu.Unlock()
 }
 
 // cancelRequest records or triggers cancellation for a request id.
@@ -939,10 +1862,18 @@ func lspErrorCodeForFormatting(err error) int {
 }
 
 func lspErrorCodeForQuery(err error) int {
-	if errors.Is(err, context.Canceled) {
+	switch {
+	case errors.Is(err, context.Canceled):
 		return lspErrorRequestCancelled
+	case errors.Is(err, ErrDocumentNotOpen):
+		return jsonRPCInvalidParams
+	case errors.Is(err, index.ErrContentModified):
+		return lspErrorContentModified
+	case errors.Is(err, index.ErrWorkspaceClosed), errors.Is(err, index.ErrWorkspaceIncomplete), errors.Is(err, index.ErrRenameBlocked):
+		return lspErrorRequestFailed
+	default:
+		return jsonRPCInternalError
 	}
-	return jsonRPCInternalError
 }
 
 func readFramedMessage(r *bufio.Reader) ([]byte, error) {

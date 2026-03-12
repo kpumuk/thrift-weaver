@@ -18,6 +18,7 @@ Use this document to quickly answer:
 flowchart LR
   subgraph Clients
     CLI["thriftfmt CLI<br/>cmd/thriftfmt"]
+    LINTCLI["thriftlint CLI<br/>cmd/thriftlint"]
     VSC["VS Code extension<br/>editors/vscode"]
   end
 
@@ -29,6 +30,7 @@ flowchart LR
     TXT["internal/text<br/>spans, line index, UTF-16, edits"]
     LEX["internal/lexer<br/>lossless tokens + trivia"]
     SYN["internal/syntax<br/>CST + diagnostics<br/>(tree-sitter-backed)"]
+    IDX["internal/index<br/>workspace scan, binding,<br/>queries, rename plans"]
     FMT["internal/format<br/>pretty-printer + range formatting"]
   end
 
@@ -40,10 +42,15 @@ flowchart LR
   CLI --> FMT
   CLI --> SYN
   CLI --> LEX
+  LINTCLI --> IDX
+  LINTCLI --> SYN
   LSP --> FMT
+  LSP --> IDX
   LSP --> SYN
   LSP --> TXT
   VSC <--> LSP
+  IDX --> SYN
+  IDX --> TXT
   SYN --> LEX
   SYN --> TSC
   TSJS --> TSC
@@ -70,10 +77,15 @@ Core implementation areas:
   - formatting policies and errors (`ErrUnsafeToFormat`)
   - doc/printer primitives
   - syntax-aware Apache Thrift formatting and range formatting
+- `internal/index`
+  - workspace file discovery and canonical URI identity
+  - immutable workspace snapshots over on-disk files plus open-document shadows
+  - include graph resolution, cross-file bindings, diagnostics, and navigation/rename queries
 - `internal/lsp`
   - stdio JSON-RPC transport
   - document snapshots/versioning
   - diagnostics/formatting/editor-query handlers
+  - workspace snapshot coordination for cross-file lint, definition, references, workspace symbols, and rename
   - semantic tokens
 
 User-facing binaries:
@@ -81,6 +93,9 @@ User-facing binaries:
 - `cmd/thriftfmt`
   - file/stdin formatting
   - `--check`, `--write`, `--range`, debug dumps
+- `cmd/thriftlint`
+  - single-file and cross-file lint execution
+  - `--cross-file`, `--workspace-root`, and `--include-dir`
 - `cmd/thriftls`
   - launches LSP server over stdio
 
@@ -102,7 +117,7 @@ Support code:
 
 - `internal/testutil` (goldens/oracle helpers)
 - `scripts/` (release metadata, perf tooling)
-- `testdata/` (formatter goldens, LSP scenarios)
+- `testdata/` (formatter goldens, LSP scenarios, workspace-index fixtures)
 
 ## Parse + Format Pipeline (Core Data Flow)
 
@@ -171,6 +186,20 @@ sequenceDiagram
   end
 ```
 
+## Workspace Index Flow
+
+Cross-file features share one workspace index instead of re-binding independently in the CLI and LSP:
+
+- `SnapshotStore` owns the latest open-document bytes, parse tree, version, and per-document generation.
+- `internal/index.Manager` owns immutable `WorkspaceSnapshot` values built from open-document shadows, direct include-closure loads, and opportunistic background discovery under the configured roots.
+- `thriftls` installs the manager immediately, refreshes the open document plus its transitive include closure synchronously, and leaves wider workspace discovery to a background loop.
+- workspace roots bound discovery scope; they do not imply a synchronous whole-root scan at `initialize` time.
+- opportunistic discovery respects recursive `.gitignore` files plus fixed VCS/editor directory skips, while direct loads for open documents and explicit include targets bypass `.gitignore` for correctness.
+- `thriftls` captures the active document snapshot and matching workspace generation before serving definition, references, workspace symbol, prepare-rename, and rename requests.
+- definition can answer from the currently loaded graph as soon as binding is exact; references and rename fail closed until discovery is complete enough to be exact; workspace symbol remains best-effort over the loaded graph.
+- parser diagnostics, local lint diagnostics, and workspace-lint diagnostics are published as independent buckets so stale workspace work cannot clear newer parse results.
+- workspace folder changes and watched file changes refresh the workspace index without exposing half-built state to readers; whole-workspace widening is explicit or triggered once from an incomplete open-document session, not by a periodic timer.
+
 ## Key Design Invariants
 
 - `internal/*` packages are implementation packages (no stable public library API commitment in v1).
@@ -180,6 +209,12 @@ sequenceDiagram
 - LSP positions are converted at the boundary:
   - LSP uses UTF-16
   - engine internals use byte offsets/spans
+- Workspace identity is shared:
+  - `SnapshotStore`, `internal/index`, and LSP handlers all use the same canonical URI and `DocumentKey` derivation
+  - open unsaved documents shadow on-disk content for diagnostics, navigation, and rename
+- Lazy discovery is explicit:
+  - open-document include closures publish first so active-file diagnostics and go-to-definition stay responsive in large monorepos
+  - background discovery widens coverage later for exact reverse-dependency queries such as references and rename
 - Comment fidelity is lexer-owned:
   - comments/trivia are preserved in lexer output
   - formatter emits comments from trivia rather than reconstructing them from syntax nodes
@@ -188,6 +223,7 @@ sequenceDiagram
 
 - New syntax parsing/query behavior: `internal/syntax` (and possibly `grammar/tree-sitter-thrift`)
 - New formatting rules or style behavior: `internal/format`
+- New cross-file binding, workspace diagnostics, or navigation/refactor behavior: `internal/index`
 - New editor features (LSP methods): `internal/lsp`
 - VS Code UX/settings/client behavior: `editors/vscode`
 - Corpus/golden/oracle tests: `testdata/*` + `internal/testutil`

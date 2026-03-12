@@ -7,13 +7,21 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	parserbackend "github.com/kpumuk/thrift-weaver/internal/syntax/backend"
 	ts "github.com/kpumuk/thrift-weaver/internal/syntax/treesitter"
+	"github.com/kpumuk/thrift-weaver/internal/testutil"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
 
@@ -32,11 +40,181 @@ func TestInitializeAdvertisesV1Capabilities(t *testing.T) {
 	if got.TextDocumentSync.Save == nil || got.TextDocumentSync.Save.IncludeText {
 		t.Fatalf("unexpected didSave sync options: %+v", got.TextDocumentSync.Save)
 	}
+	if !got.DefinitionProvider || !got.DocumentLinkProvider || !got.ReferencesProvider || !got.RenameProvider || !got.WorkspaceSymbolProvider {
+		t.Fatalf("navigation capabilities not advertised: %+v", got)
+	}
+	if got.Workspace == nil || got.Workspace.WorkspaceFolders == nil || !got.Workspace.WorkspaceFolders.Supported || !got.Workspace.WorkspaceFolders.ChangeNotifications {
+		t.Fatalf("workspace folder capabilities not advertised: %+v", got.Workspace)
+	}
 	if !got.DocumentFormattingProvider || !got.DocumentRangeFormattingProvider || !got.DocumentSymbolProvider || !got.FoldingRangeProvider || !got.SelectionRangeProvider {
 		t.Fatalf("unexpected capabilities: %+v", got)
 	}
 	if got.SemanticTokensProvider == nil || !got.SemanticTokensProvider.Full {
 		t.Fatalf("semanticTokensProvider not advertised correctly: %+v", got.SemanticTokensProvider)
+	}
+}
+
+func TestServerWorkspaceIndexHooksUseDiscoveryQueueDepth(t *testing.T) {
+	t.Parallel()
+
+	s := NewServer()
+	s.setWorkspaceHooksForTesting(index.Hooks{
+		OnEvent: func(index.Event) {},
+	})
+
+	if hooks := s.workspaceIndexHooks(); hooks.OnEvent == nil {
+		t.Fatal("expected workspace index hooks to preserve OnEvent")
+	}
+
+	s.workspaceDiscoveryMu.Lock()
+	s.workspaceDiscoveryQueued = true
+	s.workspaceDiscoveryMu.Unlock()
+
+	if hooks := s.workspaceIndexHooks(); hooks.QueueDepth == nil || hooks.QueueDepth() != 1 {
+		got := 0
+		if hooks.QueueDepth != nil {
+			got = hooks.QueueDepth()
+		}
+		t.Fatalf("workspaceIndexHooks queue depth=%d, want 1", got)
+	}
+}
+
+func TestInitializeDoesNotAutoDiscoverWorkspaceWithoutOpenDocuments(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+
+	var (
+		mu     sync.Mutex
+		events []index.Event
+	)
+
+	s := NewServer()
+	s.setWorkspaceHooksForTesting(index.Hooks{
+		OnEvent: func(event index.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		},
+	})
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	manager := s.workspaceManager()
+	if manager == nil {
+		t.Fatal("expected workspace manager")
+	}
+	snap, ok := manager.Snapshot()
+	if !ok || snap == nil {
+		t.Fatal("expected workspace snapshot")
+	}
+	if len(snap.Documents) != 0 {
+		t.Fatalf("initialized snapshot indexed %d documents, want 0", len(snap.Documents))
+	}
+	if snap.DiscoveryComplete {
+		t.Fatal("initialized snapshot should remain discovery-incomplete without open documents")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	snap, ok = manager.Snapshot()
+	if !ok || snap == nil {
+		t.Fatal("expected workspace snapshot after wait")
+	}
+	if len(snap.Documents) != 0 {
+		t.Fatalf("post-wait snapshot indexed %d documents, want 0", len(snap.Documents))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events {
+		if event.Kind == index.EventKindRebuild && event.IndexedDocuments > 0 {
+			t.Fatalf("unexpected automatic workspace discovery event: %+v", event)
+		}
+	}
+}
+
+func TestDidChangeWatchedFilesDoesNotTriggerWholeWorkspaceRescan(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	typesPath := filepath.Join(root, "types.thrift")
+	typesURI := mustCanonicalURI(t, typesPath)
+	typesSource := testutil.ReadFile(t, typesPath)
+
+	var (
+		mu     sync.Mutex
+		events []index.Event
+	)
+
+	s := NewServer()
+	s.setWorkspaceHooksForTesting(index.Hooks{
+		OnEvent: func(event index.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		},
+	})
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+
+	manager := s.workspaceManager()
+	if manager == nil {
+		t.Fatal("expected workspace manager")
+	}
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+	waitForWorkspaceDiscoveryIdle(t, s)
+
+	mu.Lock()
+	events = nil
+	mu.Unlock()
+
+	updatedTypes := append(append([]byte(nil), typesSource...), '\n')
+	if err := os.WriteFile(typesPath, updatedTypes, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", typesPath, err)
+	}
+
+	if err := s.DidChangeWatchedFiles(context.Background(), DidChangeWatchedFilesParams{
+		Changes: []FileEvent{{
+			URI:  typesURI,
+			Type: FileChangeTypeChanged,
+		}},
+	}); err != nil {
+		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	watchRebuilds := 0
+	for _, event := range events {
+		if event.Kind == index.EventKindRebuild && event.Reason == index.RebuildReasonWatch {
+			watchRebuilds++
+		}
+	}
+	if watchRebuilds != 1 {
+		t.Fatalf("watch rebuild count=%d, want 1; events=%+v", watchRebuilds, events)
 	}
 }
 
@@ -319,7 +497,7 @@ func TestServerRunPublishesDebouncedLintDiagnosticsAfterDidChange(t *testing.T) 
 		}),
 	})
 
-	time.Sleep(60 * time.Millisecond)
+	waitForWorkspaceLintPropagation()
 	stopServerAsync(t, pw, errCh)
 
 	notifications := collectPublishDiagnosticsMessages(t, readAllFrames(t, out.Bytes()))
@@ -509,6 +687,1116 @@ func TestServerSuppressesStaleDiagnosticsAcrossCloseReopenSameVersion(t *testing
 	}
 	if reopened.Generation <= initial.Generation {
 		t.Fatalf("reopened generation=%d, want > %d", reopened.Generation, initial.Generation)
+	}
+}
+
+func TestServerRunPublishesWorkspaceDiagnosticsAndClearsOnFix(t *testing.T) {
+	t.Parallel()
+
+	_, s, manager, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "missing_include")
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
+		t.Fatalf("publishDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(open): %v", err)
+	}
+
+	snap, err := s.store.Change(context.Background(), mainURI, 2, []TextDocumentContentChangeEvent{{
+		Text: "struct Holder {\n  1: string name,\n}\n",
+	}})
+	if err != nil {
+		t.Fatalf("store.Change: %v", err)
+	}
+	if err := manager.UpsertOpenDocumentWithReason(context.Background(), index.DocumentInput{
+		URI:        snap.URI,
+		Version:    snap.Version,
+		Generation: snap.Generation,
+		Source:     snap.Bytes(),
+	}, index.RebuildReasonChange); err != nil {
+		t.Fatalf("UpsertOpenDocumentWithReason: %v", err)
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(context.Background(), index.RebuildReasonChange); err != nil {
+		t.Fatalf("RefreshOpenDocumentClosureWithReason: %v", err)
+	}
+	if err := s.publishSyntaxDiagnosticsForURI(mainURI); err != nil {
+		t.Fatalf("publishSyntaxDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(change): %v", err)
+	}
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if !diagnosticsContainCode(notifications, "LINT_INCLUDE_TARGET_UNKNOWN") {
+		t.Fatalf("missing version 1 workspace diagnostics: %+v", notifications)
+	}
+	if !diagnosticsContainCode(notifications, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
+		t.Fatalf("missing version 1 qualified reference diagnostics: %+v", notifications)
+	}
+
+	final := latestDiagnosticsForVersion(t, notifications, 2)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected workspace diagnostics cleared after fix, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunSuppressesStaleWorkspaceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "missing_include")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+
+	s := NewServer()
+	s.setLintDebounceForTesting(40 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 2},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: mainText + "\n",
+			}},
+		}),
+	})
+
+	time.Sleep(20 * time.Millisecond)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didChange",
+		Params: mustJSON(t, DidChangeParams{
+			TextDocument: VersionedTextDocumentIdentifier{URI: mainURI, Version: 3},
+			ContentChanges: []TextDocumentContentChangeEvent{{
+				Text: "struct Holder {\n  1: string name,\n}\n",
+			}},
+		}),
+	})
+
+	waitForWorkspaceLintPropagation()
+	stopServerAsync(t, pw, errCh)
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	for _, diag := range notifications {
+		if diag.Version != nil && *diag.Version == 2 && containsDiagnosticCode(diag.Diagnostics, "LINT_INCLUDE_TARGET_UNKNOWN") {
+			t.Fatalf("stale version 2 workspace diagnostics were published: %+v", notifications)
+		}
+	}
+
+	final := latestDiagnosticsForVersion(t, notifications, 3)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected final version 3 diagnostics cleared, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunUpdatesWorkspaceDiagnosticsForShadowedDependents(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "shadowing")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	sharedURI := mustCanonicalURI(t, sharedPath)
+
+	s := NewServer()
+	s.setLintDebounceForTesting(10 * time.Millisecond)
+	pw, out, errCh := runServerAsync(t, s)
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: string(testutil.ReadFile(t, mainPath))},
+		}),
+	})
+
+	waitForWorkspaceLintPropagation()
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: sharedURI, Version: 1, Text: "struct Person {\n  1: string name,\n}\n"},
+		}),
+	})
+
+	waitForWorkspaceLintPropagation()
+
+	writeReqFrame(t, pw, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didClose",
+		Params:  mustJSON(t, DidCloseParams{TextDocument: TextDocumentIdentifier{URI: sharedURI}}),
+	})
+
+	waitForWorkspaceLintPropagation()
+	stopServerAsync(t, pw, errCh)
+
+	mainDiagnostics := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if !diagnosticsContainCode(mainDiagnostics, "LINT_QUALIFIED_REFERENCE_UNKNOWN") {
+		t.Fatalf("missing dependent workspace diagnostics after shadowing include: %+v", mainDiagnostics)
+	}
+	if len(latestDiagnosticsForVersion(t, mainDiagnostics, 1).Diagnostics) != 0 {
+		t.Fatalf("expected latest main diagnostics to clear after closing shadow, got %+v", latestDiagnosticsForVersion(t, mainDiagnostics, 1).Diagnostics)
+	}
+}
+
+func TestServerNavigationQueriesUseLoadedGraphBeforeDiscoveryCompletes(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+	includePos := mustLSPPositionForSubstring(t, mainText, "types.thrift")
+	userPos := mustLSPPositionForSubstring(t, mainText, "types.User input")
+
+	includeDefinitions, err := s.Definition(context.Background(), DefinitionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     includePos,
+	})
+	if err != nil {
+		t.Fatalf("Definition on include: %v", err)
+	}
+	if len(includeDefinitions) != 1 {
+		t.Fatalf("include definition count=%d, want 1", len(includeDefinitions))
+	}
+	if includeDefinitions[0].URI != typesURI {
+		t.Fatalf("include definition URI=%q, want %q", includeDefinitions[0].URI, typesURI)
+	}
+	if includeDefinitions[0].Range.Start != (Position{}) || includeDefinitions[0].Range.End != (Position{}) {
+		t.Fatalf("include definition range=%+v, want file start", includeDefinitions[0].Range)
+	}
+
+	definitions, err := s.Definition(context.Background(), DefinitionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     userPos,
+	})
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if len(definitions) != 1 {
+		t.Fatalf("definition count=%d, want 1", len(definitions))
+	}
+	if definitions[0].URI != typesURI {
+		t.Fatalf("definition URI=%q, want %q", definitions[0].URI, typesURI)
+	}
+	if got := lspRangeText(t, definitions[0].URI, definitions[0].Range); got != "User" {
+		t.Fatalf("definition text=%q, want %q", got, "User")
+	}
+
+	if _, err := s.References(context.Background(), ReferenceParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		},
+		Context: ReferenceContext{IncludeDeclaration: true},
+	}); !errors.Is(err, index.ErrWorkspaceIncomplete) {
+		t.Fatalf("References error=%v, want %v", err, index.ErrWorkspaceIncomplete)
+	}
+
+	symbols, err := s.WorkspaceSymbols(context.Background(), WorkspaceSymbolParams{Query: "user"})
+	if err != nil {
+		t.Fatalf("WorkspaceSymbols: %v", err)
+	}
+	if len(symbols) != 2 {
+		t.Fatalf("workspace symbol count=%d, want 2", len(symbols))
+	}
+	if symbols[0].Name != "User" || symbols[1].Name != "UserError" {
+		t.Fatalf("workspace symbols=%+v, want User and UserError", symbols)
+	}
+}
+
+func TestServerDocumentLinksCoverEntireIncludeString(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+
+	links, err := s.DocumentLinks(context.Background(), DocumentLinkParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+	})
+	if err != nil {
+		t.Fatalf("DocumentLinks: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("document link count=%d, want 1", len(links))
+	}
+	if links[0].Target != typesURI {
+		t.Fatalf("document link target=%q, want %q", links[0].Target, typesURI)
+	}
+	if got := lspRangeText(t, mainURI, links[0].Range); got != "\"types.thrift\"" {
+		t.Fatalf("document link text=%q, want %q", got, "\"types.thrift\"")
+	}
+}
+
+func TestServerDocumentLinksRemainAvailableForAliasConflictIncludes(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "duplicate_alias")
+	sharedURI := mustCanonicalURI(t, filepath.Join(root, "shared.thrift"))
+	nestedURI := mustCanonicalURI(t, filepath.Join(root, "nested", "shared.thrift"))
+
+	links, err := s.DocumentLinks(context.Background(), DocumentLinkParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+	})
+	if err != nil {
+		t.Fatalf("DocumentLinks: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("document link count=%d, want 2", len(links))
+	}
+
+	got := make(map[string]string, len(links))
+	for _, link := range links {
+		got[lspRangeText(t, mainURI, link.Range)] = link.Target
+	}
+	if got["\"shared.thrift\""] != sharedURI {
+		t.Fatalf("shared include target=%q, want %q", got["\"shared.thrift\""], sharedURI)
+	}
+	if got["\"nested/shared.thrift\""] != nestedURI {
+		t.Fatalf("nested include target=%q, want %q", got["\"nested/shared.thrift\""], nestedURI)
+	}
+}
+
+func TestServerDispatchDocumentLinksReturnsIncludeTargets(t *testing.T) {
+	t.Parallel()
+
+	root, s, _, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`35`),
+		Method:  "textDocument/documentLink",
+		Params: mustJSON(t, DocumentLinkParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "35")
+	if resp.Error != nil {
+		t.Fatalf("documentLink error: %+v", resp.Error)
+	}
+	var links []DocumentLink
+	marshalRoundtrip(t, resp.Result, &links)
+	if len(links) != 1 {
+		t.Fatalf("document link count=%d, want 1", len(links))
+	}
+	if links[0].Target != typesURI {
+		t.Fatalf("document link target=%q, want %q", links[0].Target, typesURI)
+	}
+}
+
+func TestServerReferencesSucceedAfterWorkspaceDiscoveryCompletes(t *testing.T) {
+	t.Parallel()
+
+	_, s, manager, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	userPos := mustLSPPositionForSubstring(t, mainText, "types.User input")
+
+	if _, err := s.References(context.Background(), ReferenceParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		},
+		Context: ReferenceContext{IncludeDeclaration: true},
+	}); !errors.Is(err, index.ErrWorkspaceIncomplete) {
+		t.Fatalf("References before rescan error=%v, want %v", err, index.ErrWorkspaceIncomplete)
+	}
+
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	references, err := s.References(context.Background(), ReferenceParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		},
+		Context: ReferenceContext{IncludeDeclaration: true},
+	})
+	if err != nil {
+		t.Fatalf("References after rescan: %v", err)
+	}
+	if len(references) != 3 {
+		t.Fatalf("references count=%d, want 3", len(references))
+	}
+}
+
+func TestServerDispatchReferencesReturnRequestFailedWhenDiscoveryIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	_, s, _, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "navigation")
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`34`),
+		Method:  "textDocument/references",
+		Params: mustJSON(t, ReferenceParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     mustLSPPositionForSubstring(t, mainText, "types.User input"),
+			},
+			Context: ReferenceContext{IncludeDeclaration: true},
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "34")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("references error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, index.ErrWorkspaceIncomplete.Error()) {
+		t.Fatalf("references message=%q, want workspace discovery incomplete", resp.Error.Message)
+	}
+}
+
+func TestServerRunNavigationQueriesReturnEmptyForUnresolvedBinding(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "missing_include")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	refPos := mustLSPPositionForSubstring(t, []byte(mainText), "missing.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`40`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`41`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     refPos,
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`42`),
+		Method:  "textDocument/references",
+		Params: mustJSON(t, ReferenceParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     refPos,
+			},
+			Context: ReferenceContext{IncludeDeclaration: true},
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+	defResp := responseByID(t, msgs, "41")
+	if defResp.Error != nil {
+		t.Fatalf("definition error: %+v", defResp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, defResp.Result, &definitions)
+	if len(definitions) != 0 {
+		t.Fatalf("definition returned %+v, want empty", definitions)
+	}
+
+	refResp := responseByID(t, msgs, "42")
+	if refResp.Error != nil {
+		t.Fatalf("references error: %+v", refResp.Error)
+	}
+	var references []Location
+	marshalRoundtrip(t, refResp.Result, &references)
+	if len(references) != 0 {
+		t.Fatalf("references returned %+v, want empty", references)
+	}
+}
+
+func TestServerRunDefinitionUsesOpenShadowAndSymlinkURI(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "shadowing")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	mainText := string(testutil.ReadFile(t, mainPath))
+	shadowedShared := "\n\nstruct User {\n  1: string name,\n}\n"
+
+	linkPath := filepath.Join(root, "main-link.thrift")
+	if err := os.Symlink(mainPath, linkPath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	linkURI := rawFileURI(linkPath)
+	sharedURI := mustCanonicalURI(t, sharedPath)
+	refPos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`50`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: linkURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: sharedURI, Version: 1, Text: shadowedShared},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`51`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: linkURI},
+			Position:     refPos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "51")
+	if resp.Error != nil {
+		t.Fatalf("definition error: %+v", resp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, resp.Result, &definitions)
+	if len(definitions) != 1 {
+		t.Fatalf("definition count=%d, want 1", len(definitions))
+	}
+	if definitions[0].URI != sharedURI {
+		t.Fatalf("definition URI=%q, want %q", definitions[0].URI, sharedURI)
+	}
+	if definitions[0].Range.Start.Line != 2 {
+		t.Fatalf("definition line=%d, want 2 for open shadow", definitions[0].Range.Start.Line)
+	}
+}
+
+func TestServerDefinitionReturnsContentModifiedWhenWorkspaceSnapshotDrifts(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	userPos := mustLSPPositionForSubstring(t, []byte(mainText), "types.User input")
+
+	s := NewServer()
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	if _, err := s.Store().Change(context.Background(), mainURI, 2, []TextDocumentContentChangeEvent{{
+		Text: mainText + "\n",
+	}}); err != nil {
+		t.Fatalf("Store.Change: %v", err)
+	}
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`60`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     userPos,
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "60")
+	if resp.Error == nil || resp.Error.Code != lspErrorContentModified {
+		t.Fatalf("definition error=%+v, want ContentModified", resp.Error)
+	}
+}
+
+func TestServerRunDefinitionSupportsCaseVariantURIOnCaseInsensitiveFS(t *testing.T) {
+	t.Parallel()
+
+	if !caseInsensitiveFilesystem() {
+		t.Skip("case-variant URIs require a case-insensitive filesystem")
+	}
+
+	root := testutil.CopyWorkspaceFixture(t, "navigation")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	typesURI := mustCanonicalURI(t, filepath.Join(root, "types.thrift"))
+	mainText := string(testutil.ReadFile(t, mainPath))
+	userPos := mustLSPPositionForSubstring(t, []byte(mainText), "types.User input")
+
+	caseVariantPath, ok := alternateCasePath(mainPath)
+	if !ok {
+		t.Skip("no alphabetic characters available for case-variant path")
+	}
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`70`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: rawFileURI(caseVariantPath), Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`71`),
+		Method:  "textDocument/definition",
+		Params: mustJSON(t, DefinitionParams{
+			TextDocument: TextDocumentIdentifier{URI: rawFileURI(caseVariantPath)},
+			Position:     userPos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "71")
+	if resp.Error != nil {
+		t.Fatalf("definition error: %+v", resp.Error)
+	}
+	var definitions []Location
+	marshalRoundtrip(t, resp.Result, &definitions)
+	if len(definitions) != 1 || definitions[0].URI != typesURI {
+		t.Fatalf("definition=%+v, want single target %q", definitions, typesURI)
+	}
+}
+
+func TestServerRunPrepareRenameAndRename(t *testing.T) {
+	t.Parallel()
+
+	root, s, manager, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "rename")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	sharedURI := mustCanonicalURI(t, sharedPath)
+	renamePos := mustLSPPositionForSubstring(t, mainText, "shared.User user")
+
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	prepareResult, err := s.PrepareRename(context.Background(), PrepareRenameParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     renamePos,
+	})
+	if err != nil {
+		t.Fatalf("PrepareRename: %v", err)
+	}
+	if prepareResult.Placeholder != "User" {
+		t.Fatalf("prepareRename placeholder=%q, want %q", prepareResult.Placeholder, "User")
+	}
+	if got := lspRangeText(t, mainURI, prepareResult.Range); got != "User" {
+		t.Fatalf("prepareRename text=%q, want %q", got, "User")
+	}
+
+	edit, err := s.Rename(context.Background(), RenameParams{
+		TextDocumentPositionParams: TextDocumentPositionParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+		},
+		NewName: "Person",
+	})
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if len(edit.DocumentChanges) != 2 {
+		t.Fatalf("rename documentChanges=%d, want 2", len(edit.DocumentChanges))
+	}
+	if edit.DocumentChanges[0].TextDocument.URI != mainURI || edit.DocumentChanges[1].TextDocument.URI != sharedURI {
+		t.Fatalf("rename document order=%+v", edit.DocumentChanges)
+	}
+	if edit.DocumentChanges[0].TextDocument.Version == nil || *edit.DocumentChanges[0].TextDocument.Version != 1 {
+		t.Fatalf("open document version=%v, want 1", edit.DocumentChanges[0].TextDocument.Version)
+	}
+	if edit.DocumentChanges[1].TextDocument.Version != nil {
+		t.Fatalf("closed document version=%v, want nil", edit.DocumentChanges[1].TextDocument.Version)
+	}
+	if len(edit.DocumentChanges[0].Edits) != 2 {
+		t.Fatalf("main rename edits=%+v, want 2", edit.DocumentChanges[0].Edits)
+	}
+	if compareRangeStarts(edit.DocumentChanges[0].Edits[0].Range, edit.DocumentChanges[0].Edits[1].Range) >= 0 {
+		t.Fatalf("main rename edits should be sorted ascending: %+v", edit.DocumentChanges[0].Edits)
+	}
+
+	renamedMain := applyWorkspaceTextEdits(t, mainText, edit.DocumentChanges[0].Edits)
+	if string(renamedMain) != "include \"shared.thrift\"\n\nstruct Holder {\n  1: shared.Person user,\n  2: shared.Person backup,\n}\n" {
+		t.Fatalf("renamed main = %q", renamedMain)
+	}
+	renamedShared := applyWorkspaceTextEdits(t, testutil.ReadFile(t, sharedPath), edit.DocumentChanges[1].Edits)
+	if string(renamedShared) != "struct Person {\n  1: string name,\n}\n" {
+		t.Fatalf("renamed shared = %q", renamedShared)
+	}
+}
+
+func TestServerRenameReturnsWorkspaceIncompleteBeforeDiscoveryCompletes(t *testing.T) {
+	t.Parallel()
+
+	_, s, _, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "rename")
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`83`),
+		Method:  "textDocument/rename",
+		Params: mustJSON(t, RenameParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     mustLSPPositionForSubstring(t, mainText, "shared.User user"),
+			},
+			NewName: "Person",
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "83")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("rename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, index.ErrWorkspaceIncomplete.Error()) {
+		t.Fatalf("rename message=%q, want workspace discovery incomplete", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameBlockedForAmbiguousReference(t *testing.T) {
+	t.Parallel()
+
+	root := testutil.CopyWorkspaceFixture(t, "duplicate_alias")
+	rootURI := mustCanonicalURI(t, root)
+	mainPath := filepath.Join(root, "main.thrift")
+	mainURI := mustCanonicalURI(t, mainPath)
+	mainText := string(testutil.ReadFile(t, mainPath))
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`90`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`91`),
+		Method:  "textDocument/prepareRename",
+		Params: mustJSON(t, PrepareRenameParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "91")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("prepareRename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "ambiguous") {
+		t.Fatalf("prepareRename message=%q, want ambiguous", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameBlockedForTaintedReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sharedPath := filepath.Join(root, "shared.thrift")
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
+
+	rootURI := mustCanonicalURI(t, root)
+	mainURI := mustCanonicalURI(t, filepath.Join(root, "main.thrift"))
+	mainText := "include \"shared.thrift\"\n\nstruct Holder {\n  1: shared.User user,\n"
+	renamePos := mustLSPPositionForSubstring(t, []byte(mainText), "shared.User")
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`95`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`96`),
+		Method:  "textDocument/prepareRename",
+		Params: mustJSON(t, PrepareRenameParams{
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+		}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "96")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("prepareRename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "tainted") {
+		t.Fatalf("prepareRename message=%q, want tainted", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameBlockedForInvalidName(t *testing.T) {
+	t.Parallel()
+
+	_, s, manager, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "rename")
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`101`),
+		Method:  "textDocument/rename",
+		Params: mustJSON(t, RenameParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     mustLSPPositionForSubstring(t, mainText, "shared.User user"),
+			},
+			NewName: "struct",
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "101")
+	if resp.Error == nil || resp.Error.Code != lspErrorRequestFailed {
+		t.Fatalf("rename error=%+v, want RequestFailed", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "identifier") {
+		t.Fatalf("rename message=%q, want identifier", resp.Error.Message)
+	}
+}
+
+func TestServerRunRenameAbortsOnClosedFileDrift(t *testing.T) {
+	t.Parallel()
+
+	root, s, manager, mainURI, mainText := openServerWorkspaceMainDocumentForTesting(t, "rename")
+	sharedPath := filepath.Join(root, "shared.thrift")
+	renamePos := mustLSPPositionForSubstring(t, mainText, "shared.User user")
+
+	if err := manager.RescanWorkspaceWithReason(context.Background(), index.RebuildReasonManualRescan); err != nil {
+		t.Fatalf("RescanWorkspaceWithReason: %v", err)
+	}
+
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n  2: string alias,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
+
+	req := Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`110`),
+		Method:  "textDocument/rename",
+		Params: mustJSON(t, RenameParams{
+			TextDocumentPositionParams: TextDocumentPositionParams{
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     renamePos,
+			},
+			NewName: "Person",
+		}),
+	}
+	if err := s.dispatch(context.Background(), req); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	resp := responseByID(t, readAllFrames(t, out.Bytes()), "110")
+	if resp.Error == nil || resp.Error.Code != lspErrorContentModified {
+		t.Fatalf("rename error=%+v, want ContentModified", resp.Error)
+	}
+}
+
+func TestServerRunWatchedFileChangesRefreshWorkspaceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	root, s, manager, mainURI, _ := openServerWorkspaceMainDocumentForTesting(t, "missing_include")
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
+		t.Fatalf("publishDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(open): %v", err)
+	}
+
+	missingPath := filepath.Join(root, "missing.thrift")
+	if err := os.WriteFile(missingPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", missingPath, err)
+	}
+	if err := manager.RefreshDocumentWithReason(context.Background(), mustCanonicalURI(t, missingPath), false, index.RebuildReasonWatch); err != nil {
+		t.Fatalf("RefreshDocumentWithReason: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot(watch): %v", err)
+	}
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if !diagnosticsContainCode(notifications, "LINT_INCLUDE_TARGET_UNKNOWN") {
+		t.Fatalf("missing initial workspace diagnostics: %+v", notifications)
+	}
+	final := latestDiagnosticsForVersion(t, notifications, 1)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected workspace diagnostics to clear after watched file create, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunWorkspaceDiagnosticsBypassGitIgnoreForExplicitIncludes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("vendor/\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o750); err != nil {
+		t.Fatalf("MkdirAll vendor: %v", err)
+	}
+
+	mainPath := filepath.Join(root, "main.thrift")
+	sharedPath := filepath.Join(root, "vendor", "shared.thrift")
+	mainText := "include \"vendor/shared.thrift\"\n\nstruct Holder {\n  1: shared.User user,\n}\n"
+	if err := os.WriteFile(mainPath, []byte(mainText), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", mainPath, err)
+	}
+	if err := os.WriteFile(sharedPath, []byte("struct User {\n  1: string name,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", sharedPath, err)
+	}
+
+	rootURI := mustCanonicalURI(t, root)
+	mainURI := mustCanonicalURI(t, mainPath)
+
+	s := NewServer()
+	var out bytes.Buffer
+	s.attachRuntime(t.Context(), &out)
+	defer s.detachRuntime()
+
+	if _, err := s.Initialize(context.Background(), InitializeParams{
+		WorkspaceFolders: []WorkspaceFolder{{URI: rootURI}},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := s.DidOpen(context.Background(), DidOpenParams{
+		TextDocument: TextDocumentItem{URI: mainURI, Version: 1, Text: mainText},
+	}); err != nil {
+		t.Fatalf("DidOpen: %v", err)
+	}
+	waitForWorkspaceLintPropagation()
+	if err := s.publishDiagnosticsForURI(context.Background(), mainURI); err != nil {
+		t.Fatalf("publishDiagnosticsForURI: %v", err)
+	}
+	if err := publishWorkspaceDiagnosticsForCurrentSnapshot(t, s, mainURI); err != nil {
+		t.Fatalf("publishWorkspaceDiagnosticsForCurrentSnapshot: %v", err)
+	}
+
+	notifications := diagnosticsForURI(t, readAllFrames(t, out.Bytes()), mainURI)
+	if len(notifications) == 0 {
+		t.Fatal("expected diagnostics publication for opened document")
+	}
+	final := latestDiagnosticsForVersion(t, notifications, 1)
+	if len(final.Diagnostics) != 0 {
+		t.Fatalf("expected explicit include target under .gitignore to stay diagnostic-free, got %+v", final.Diagnostics)
+	}
+}
+
+func TestServerRunWorkspaceFolderChangesReconfigureManager(t *testing.T) {
+	t.Parallel()
+
+	root1 := testutil.CopyWorkspaceFixture(t, "navigation")
+	root2 := testutil.CopyWorkspaceFixture(t, "rename")
+	root1URI := mustCanonicalURI(t, root1)
+	root2URI := mustCanonicalURI(t, root2)
+	root2MainPath := filepath.Join(root2, "main.thrift")
+	root2MainURI := mustCanonicalURI(t, root2MainPath)
+	root2MainText := string(testutil.ReadFile(t, root2MainPath))
+
+	var in bytes.Buffer
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`130`),
+		Method:  "initialize",
+		Params: mustJSON(t, InitializeParams{
+			WorkspaceFolders: []WorkspaceFolder{{URI: root1URI}},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`131`),
+		Method:  "workspace/symbol",
+		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "Parent"}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "workspace/didChangeWorkspaceFolders",
+		Params: mustJSON(t, DidChangeWorkspaceFoldersParams{
+			Event: WorkspaceFoldersChangeEvent{
+				Added:   []WorkspaceFolder{{URI: root2URI}},
+				Removed: []WorkspaceFolder{{URI: root1URI}},
+			},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		Method:  "textDocument/didOpen",
+		Params: mustJSON(t, DidOpenParams{
+			TextDocument: TextDocumentItem{URI: root2MainURI, Version: 1, Text: root2MainText},
+		}),
+	})
+	writeReqFrame(t, &in, Request{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`132`),
+		Method:  "workspace/symbol",
+		Params:  mustJSON(t, WorkspaceSymbolParams{Query: "Holder"}),
+	})
+
+	var out bytes.Buffer
+	if err := NewServer().Run(context.Background(), &in, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	msgs := readAllFrames(t, out.Bytes())
+	before := responseByID(t, msgs, "131")
+	if before.Error != nil {
+		t.Fatalf("workspace/symbol before error: %+v", before.Error)
+	}
+	var beforeSymbols []SymbolInformation
+	marshalRoundtrip(t, before.Result, &beforeSymbols)
+	if len(beforeSymbols) != 0 {
+		t.Fatalf("workspace symbols before=%+v, want empty before any document is loaded", beforeSymbols)
+	}
+
+	after := responseByID(t, msgs, "132")
+	if after.Error != nil {
+		t.Fatalf("workspace/symbol after error: %+v", after.Error)
+	}
+	var afterSymbols []SymbolInformation
+	marshalRoundtrip(t, after.Result, &afterSymbols)
+	if len(afterSymbols) != 1 || afterSymbols[0].Name != "Holder" {
+		t.Fatalf("workspace symbols after=%+v, want Holder", afterSymbols)
 	}
 }
 
@@ -941,6 +2229,71 @@ func stopServerAsync(t *testing.T, pw *io.PipeWriter, errCh <-chan error) {
 	}
 }
 
+func waitForWorkspaceLintPropagation() {
+	time.Sleep(150 * time.Millisecond)
+}
+
+func publishWorkspaceDiagnosticsForCurrentSnapshot(t *testing.T, s *Server, uri string) error {
+	t.Helper()
+
+	snap, err := s.latestSnapshot(uri)
+	if err != nil {
+		return err
+	}
+	if snap == nil {
+		t.Fatalf("missing open snapshot for %s", uri)
+	}
+	diags, err := s.collectWorkspaceLintDiagnostics(context.Background(), uri, snap.Version, snap.Generation)
+	if err != nil {
+		return err
+	}
+	if len(diags) == 0 && !s.hasDiagnosticBucket(uri, diagnosticBucketWorkspace) {
+		return nil
+	}
+	return s.replaceDiagnosticBuckets(
+		uri,
+		snap.Version,
+		snap.Generation,
+		diagnosticBucketUpdate{bucket: diagnosticBucketWorkspace, diagnostics: diags},
+	)
+}
+
+func openServerWorkspaceMainDocumentForTesting(t *testing.T, fixture string) (string, *Server, *index.Manager, string, []byte) {
+	t.Helper()
+
+	root := testutil.CopyWorkspaceFixture(t, fixture)
+	path := filepath.Join(root, "main.thrift")
+	uri := mustCanonicalURI(t, path)
+	src := testutil.ReadFile(t, path)
+
+	s := NewServer()
+	snap, err := s.store.Open(context.Background(), uri, 1, src)
+	if err != nil {
+		t.Fatalf("store.Open(%s): %v", uri, err)
+	}
+
+	manager := index.NewManager(index.Options{WorkspaceRoots: []string{root}})
+	t.Cleanup(manager.Close)
+	if err := manager.UpsertOpenDocumentWithReason(context.Background(), index.DocumentInput{
+		URI:        snap.URI,
+		Version:    snap.Version,
+		Generation: snap.Generation,
+		Source:     snap.Bytes(),
+	}, index.RebuildReasonOpen); err != nil {
+		t.Fatalf("UpsertOpenDocumentWithReason(%s): %v", uri, err)
+	}
+	if err := manager.RefreshOpenDocumentClosureWithReason(context.Background(), index.RebuildReasonOpen); err != nil {
+		t.Fatalf("RefreshOpenDocumentClosureWithReason(%s): %v", uri, err)
+	}
+
+	s.workspaceMu.Lock()
+	s.workspace = manager
+	s.workspaceRoots = []string{root}
+	s.workspaceMu.Unlock()
+
+	return root, s, manager, uri, src
+}
+
 func readRespFrame(t *testing.T, r *bufio.Reader) Response {
 	t.Helper()
 	b, err := readFramedMessage(r)
@@ -978,6 +2331,156 @@ func int32Ptr(v int32) *int32 {
 	p := new(int32)
 	*p = v
 	return p
+}
+
+func mustCanonicalURI(t *testing.T, path string) string {
+	t.Helper()
+	uri, _, err := index.CanonicalizeDocumentURI(path)
+	if err != nil {
+		t.Fatalf("CanonicalizeDocumentURI(%s): %v", path, err)
+	}
+	return uri
+}
+
+func mustLSPPositionForSubstring(t *testing.T, src []byte, needle string) Position {
+	t.Helper()
+	start := strings.Index(string(src), needle)
+	if start < 0 {
+		t.Fatalf("substring %q not found", needle)
+	}
+	li := itext.NewLineIndex(src)
+	pos, err := li.OffsetToUTF16Position(itext.ByteOffset(start))
+	if err != nil {
+		t.Fatalf("OffsetToUTF16Position(%q): %v", needle, err)
+	}
+	return Position{Line: pos.Line, Character: pos.Character}
+}
+
+func lspRangeText(t *testing.T, uri string, rng Range) string {
+	t.Helper()
+	path, err := filePathFromDocumentURI(uri)
+	if err != nil {
+		t.Fatalf("filePathFromDocumentURI(%s): %v", uri, err)
+	}
+	src := testutil.ReadFile(t, path)
+	li := itext.NewLineIndex(src)
+	span, err := byteSpanFromLSPRange(li, rng)
+	if err != nil {
+		t.Fatalf("byteSpanFromLSPRange(%s): %v", uri, err)
+	}
+	if int(span.End) > len(src) {
+		t.Fatalf("range %v out of bounds for %s", rng, uri)
+	}
+	return string(src[span.Start:span.End])
+}
+
+func applyWorkspaceTextEdits(t *testing.T, src []byte, edits []TextEdit) []byte {
+	t.Helper()
+	li := itext.NewLineIndex(src)
+	byteEdits := make([]itext.ByteEdit, 0, len(edits))
+	for _, edit := range edits {
+		span, err := byteSpanFromLSPRange(li, edit.Range)
+		if err != nil {
+			t.Fatalf("byteSpanFromLSPRange: %v", err)
+		}
+		byteEdits = append(byteEdits, itext.ByteEdit{
+			Span:    span,
+			NewText: []byte(edit.NewText),
+		})
+	}
+	out, err := itext.ApplyEdits(src, byteEdits)
+	if err != nil {
+		t.Fatalf("ApplyEdits: %v", err)
+	}
+	return out
+}
+
+func compareRangeStarts(a, b Range) int {
+	if a.Start.Line < b.Start.Line {
+		return -1
+	}
+	if a.Start.Line > b.Start.Line {
+		return 1
+	}
+	if a.Start.Character < b.Start.Character {
+		return -1
+	}
+	if a.Start.Character > b.Start.Character {
+		return 1
+	}
+	return 0
+}
+
+func rawFileURI(path string) string {
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+}
+
+func alternateCasePath(path string) (string, bool) {
+	runes := []rune(path)
+	for i, r := range runes {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		alt := append([]rune(nil), runes...)
+		if unicode.IsUpper(r) {
+			alt[i] = unicode.ToLower(r)
+		} else {
+			alt[i] = unicode.ToUpper(r)
+		}
+		return string(alt), true
+	}
+	return "", false
+}
+
+func caseInsensitiveFilesystem() bool {
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	default:
+		return false
+	}
+}
+
+func diagnosticsForURI(t *testing.T, msgs []testFrame, uri string) []PublishDiagnosticsParams {
+	t.Helper()
+	notifications := collectPublishDiagnosticsMessages(t, msgs)
+	out := make([]PublishDiagnosticsParams, 0, len(notifications))
+	for _, msg := range notifications {
+		var diag PublishDiagnosticsParams
+		marshalRoundtrip(t, msg.Params, &diag)
+		if diag.URI == uri {
+			out = append(out, diag)
+		}
+	}
+	return out
+}
+
+func diagnosticsContainCode(diags []PublishDiagnosticsParams, code string) bool {
+	for _, diag := range diags {
+		if diag.Version != nil && containsDiagnosticCode(diag.Diagnostics, code) {
+			return true
+		}
+	}
+	return false
+}
+
+func latestDiagnosticsForVersion(t *testing.T, diags []PublishDiagnosticsParams, version int32) PublishDiagnosticsParams {
+	t.Helper()
+	var (
+		found bool
+		last  PublishDiagnosticsParams
+	)
+	for _, diag := range diags {
+		if diag.Version == nil || *diag.Version != version {
+			continue
+		}
+		found = true
+		last = diag
+	}
+	if !found {
+		t.Fatalf("missing diagnostics for version %d in %+v", version, diags)
+	}
+	return last
 }
 
 type testFrame struct {
@@ -1031,6 +2534,23 @@ func responseByID(t *testing.T, msgs []testFrame, id string) Response {
 	}
 	t.Fatalf("response id=%s not found", id)
 	return Response{}
+}
+
+func waitForWorkspaceDiscoveryIdle(t *testing.T, s *Server) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.workspaceDiscoveryMu.Lock()
+		running := s.workspaceDiscoveryRunning
+		queued := s.workspaceDiscoveryQueued
+		s.workspaceDiscoveryMu.Unlock()
+		if !running && !queued {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("workspace discovery did not quiesce")
 }
 
 func findDocumentSymbol(in []DocumentSymbol, name string) *DocumentSymbol {

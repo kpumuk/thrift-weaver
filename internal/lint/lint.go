@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 )
 
@@ -23,9 +24,17 @@ type Rule interface {
 	Run(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagnostic, error)
 }
 
+// WorkspaceRule is a lint check that emits diagnostics from an indexed workspace document view.
+type WorkspaceRule interface {
+	ID() string
+	Description() string
+	RunWorkspace(ctx context.Context, view *index.DocumentView) ([]syntax.Diagnostic, error)
+}
+
 // Runner executes lint rules and returns aggregated diagnostics.
 type Runner struct {
-	rules []Rule
+	rules          []Rule
+	workspaceRules []WorkspaceRule
 }
 
 // NewRunner builds a lint runner from a rule set.
@@ -33,19 +42,34 @@ func NewRunner(rules ...Rule) *Runner {
 	return &Runner{rules: slices.Clone(rules)}
 }
 
+// NewRunnerWithWorkspace builds a lint runner from local and workspace-aware rule sets.
+func NewRunnerWithWorkspace(rules []Rule, workspaceRules []WorkspaceRule) *Runner {
+	return &Runner{
+		rules:          slices.Clone(rules),
+		workspaceRules: slices.Clone(workspaceRules),
+	}
+}
+
 // NewDefaultRunner builds the default lint rule set.
 func NewDefaultRunner() *Runner {
-	return NewRunner(
-		FieldIDRequiredRule{},
-		FieldIDUniqueRule{},
-		FieldNameUniqueRule{},
-		UnknownTypeRule{},
-		TypedefUnknownBaseRule{},
-		ServiceSemanticsRule{},
-		DeprecatedFieldModifiersRule{},
-		DeprecatedXSDAllRule{},
-		UnionFieldRequirednessRule{},
-		NegativeEnumValueRule{},
+	return NewRunnerWithWorkspace(
+		[]Rule{
+			FieldIDRequiredRule{},
+			FieldIDUniqueRule{},
+			FieldNameUniqueRule{},
+			UnknownTypeRule{},
+			TypedefUnknownBaseRule{},
+			ServiceSemanticsRule{},
+			DeprecatedFieldModifiersRule{},
+			DeprecatedXSDAllRule{},
+			UnionFieldRequirednessRule{},
+			NegativeEnumValueRule{},
+		},
+		[]WorkspaceRule{
+			IncludeTargetsWorkspaceRule{},
+			QualifiedReferenceWorkspaceRule{},
+			WorkspaceServiceSemanticsRule{},
+		},
 	)
 }
 
@@ -81,6 +105,40 @@ func (r *Runner) Run(ctx context.Context, tree *syntax.Tree) ([]syntax.Diagnosti
 
 	SortDiagnostics(out)
 
+	return out, nil
+}
+
+// RunWithWorkspace executes all configured workspace-aware rules and returns a sorted diagnostic list.
+func (r *Runner) RunWithWorkspace(ctx context.Context, view *index.DocumentView) ([]syntax.Diagnostic, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if view == nil || view.Document == nil || view.Snapshot == nil {
+		return []syntax.Diagnostic{}, nil
+	}
+	if r == nil || len(r.workspaceRules) == 0 {
+		return []syntax.Diagnostic{}, nil
+	}
+
+	out := make([]syntax.Diagnostic, 0, 8)
+	for _, rule := range r.workspaceRules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		diags, err := rule.RunWorkspace(ctx, view)
+		if err != nil {
+			return nil, fmt.Errorf("workspace rule %s: %w", rule.ID(), err)
+		}
+		for i := range diags {
+			if diags[i].Source == "" {
+				diags[i].Source = DiagnosticSourceWorkspace
+			}
+		}
+		out = append(out, diags...)
+	}
+
+	SortDiagnostics(out)
 	return out, nil
 }
 

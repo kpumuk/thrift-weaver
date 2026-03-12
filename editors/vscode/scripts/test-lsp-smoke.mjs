@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionRoot = path.resolve(__dirname, '..');
@@ -149,7 +149,7 @@ async function main() {
   });
 
   const peer = new LspPeer(proc);
-  const uri = 'file:///smoke.thrift';
+  const uri = pathToFileURL(path.join(repoRoot, 'smoke.thrift')).href;
 
   try {
     const init = await peer.request('initialize', {

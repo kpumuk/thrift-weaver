@@ -71,6 +71,7 @@ Main settings:
 
 - Server path: use your own `thriftls` binary.
 - Server args: pass extra args to `thriftls`.
+- Workspace index workers: control parallel workspace indexing (`0` = server default).
 - Line width: set your preferred wrap width.
 - Trace level: choose `off`, `messages`, or `verbose`.
 - Managed install: choose if auto install is on.
@@ -85,6 +86,8 @@ Main settings:
   "thrift.server.path": "",
   // Extra args for thriftls
   "thrift.server.args": [],
+  // Parallel workers for workspace indexing (0 = server default)
+  "thrift.workspace.indexWorkers": 0,
   // Preferred line width for formatting
   "thrift.format.lineWidth": 100,
   // LSP trace level

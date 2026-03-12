@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
 	itext "github.com/kpumuk/thrift-weaver/internal/text"
 )
@@ -31,7 +32,7 @@ func (s *Snapshot) Bytes() []byte {
 // SnapshotStore stores versioned parsed documents.
 type SnapshotStore struct {
 	mu   sync.RWMutex
-	docs map[string]*documentState
+	docs map[index.DocumentKey]*documentState
 }
 
 type documentState struct {
@@ -44,7 +45,7 @@ type documentState struct {
 
 // NewSnapshotStore creates an empty snapshot store.
 func NewSnapshotStore() *SnapshotStore {
-	return &SnapshotStore{docs: make(map[string]*documentState)}
+	return &SnapshotStore{docs: make(map[index.DocumentKey]*documentState)}
 }
 
 // Open parses and stores a document snapshot.
@@ -52,15 +53,18 @@ func (s *SnapshotStore) Open(ctx context.Context, uri string, version int32, src
 	if s == nil {
 		return nil, errors.New("nil SnapshotStore")
 	}
-	doc := s.documentState(uri, true)
-	doc.mu.Lock()
-	defer doc.mu.Unlock()
-
-	tree, err := syntax.Parse(ctx, src, syntax.ParseOptions{URI: uri, Version: version})
+	doc, canonicalURI, err := s.documentState(uri, true)
 	if err != nil {
 		return nil, err
 	}
-	return doc.storeSnapshotLocked(uri, version, tree), nil
+	doc.mu.Lock()
+	defer doc.mu.Unlock()
+
+	tree, err := syntax.Parse(ctx, src, syntax.ParseOptions{URI: canonicalURI, Version: version})
+	if err != nil {
+		return nil, err
+	}
+	return doc.storeSnapshotLocked(canonicalURI, version, tree), nil
 }
 
 // Change applies incremental LSP changes, reparses, and replaces the snapshot.
@@ -68,7 +72,10 @@ func (s *SnapshotStore) Change(ctx context.Context, uri string, version int32, c
 	if s == nil {
 		return nil, errors.New("nil SnapshotStore")
 	}
-	doc := s.documentState(uri, false)
+	doc, canonicalURI, err := s.documentState(uri, false)
+	if err != nil {
+		return nil, err
+	}
 	if doc == nil {
 		return nil, ErrDocumentNotOpen
 	}
@@ -89,14 +96,14 @@ func (s *SnapshotStore) Change(ctx context.Context, uri string, version int32, c
 	}
 	var nextTree *syntax.Tree
 	if incrementalEligible {
-		nextTree, err = syntax.ApplyIncrementalEditsAndReparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: uri, Version: version}, incrementalEdits)
+		nextTree, err = syntax.ApplyIncrementalEditsAndReparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: canonicalURI, Version: version}, incrementalEdits)
 	} else {
-		nextTree, err = syntax.Reparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: uri, Version: version})
+		nextTree, err = syntax.Reparse(ctx, cur.Tree, nextSrc, syntax.ParseOptions{URI: canonicalURI, Version: version})
 	}
 	if err != nil {
 		return nil, err
 	}
-	return doc.storeSnapshotLocked(uri, version, nextTree), nil
+	return doc.storeSnapshotLocked(canonicalURI, version, nextTree), nil
 }
 
 // Close removes a tracked document snapshot.
@@ -104,7 +111,10 @@ func (s *SnapshotStore) Close(uri string) {
 	if s == nil {
 		return
 	}
-	doc := s.documentState(uri, false)
+	doc, _, err := s.documentState(uri, false)
+	if err != nil {
+		return
+	}
 	if doc == nil {
 		return
 	}
@@ -123,7 +133,10 @@ func (s *SnapshotStore) Snapshot(uri string) (*Snapshot, bool) {
 	if s == nil {
 		return nil, false
 	}
-	doc := s.documentState(uri, false)
+	doc, _, err := s.documentState(uri, false)
+	if err != nil {
+		return nil, false
+	}
 	if doc == nil {
 		return nil, false
 	}
@@ -148,22 +161,61 @@ func (s *SnapshotStore) SnapshotAtVersion(uri string, version int32) (*Snapshot,
 	return snap, nil
 }
 
-func (s *SnapshotStore) documentState(uri string, create bool) *documentState {
+// Snapshots returns the current immutable document snapshots in deterministic URI order.
+func (s *SnapshotStore) Snapshots() []*Snapshot {
+	if s == nil {
+		return nil
+	}
+
 	s.mu.RLock()
-	doc := s.docs[uri]
+	docs := make([]*documentState, 0, len(s.docs))
+	for _, doc := range s.docs {
+		docs = append(docs, doc)
+	}
+	s.mu.RUnlock()
+
+	out := make([]*Snapshot, 0, len(docs))
+	for _, doc := range docs {
+		doc.mu.RLock()
+		snap := doc.snapshot
+		doc.mu.RUnlock()
+		if snap != nil {
+			out = append(out, snap)
+		}
+	}
+	slices.SortFunc(out, func(a, b *Snapshot) int {
+		if a.URI < b.URI {
+			return -1
+		}
+		if a.URI > b.URI {
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+func (s *SnapshotStore) documentState(uri string, create bool) (*documentState, string, error) {
+	canonicalURI, key, err := index.CanonicalizeDocumentURI(uri)
+	if err != nil {
+		return nil, "", err
+	}
+
+	s.mu.RLock()
+	doc := s.docs[key]
 	s.mu.RUnlock()
 	if doc != nil || !create {
-		return doc
+		return doc, canonicalURI, nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if doc = s.docs[uri]; doc != nil {
-		return doc
+	if doc = s.docs[key]; doc != nil {
+		return doc, canonicalURI, nil
 	}
 	doc = &documentState{}
-	s.docs[uri] = doc
-	return doc
+	s.docs[key] = doc
+	return doc, canonicalURI, nil
 }
 
 func (d *documentState) nextGeneration() uint64 {

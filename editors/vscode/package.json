@@ -96,6 +96,12 @@
           },
           "markdownDescription": "Additional arguments passed to `thriftls`."
         },
+        "thrift.workspace.indexWorkers": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "Maximum number of parallel workers used by `thriftls` for workspace indexing. Set to `0` to use the server default."
+        },
         "thrift.format.lineWidth": {
           "type": "number",
           "default": 100,

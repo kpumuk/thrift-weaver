@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kpumuk/thrift-weaver/internal/lint"
 )
 
 func TestRunRejectsInvalidArgs(t *testing.T) {
@@ -85,5 +87,51 @@ func TestRunJSONDiagnostics(t *testing.T) {
 	}
 	if payload[0].Code == "" || payload[0].Message == "" {
 		t.Fatalf("unexpected diagnostic payload: %+v", payload[0])
+	}
+}
+
+func TestRunPathDefaultsToCrossFileTransitive(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "main.thrift")
+	if err := os.WriteFile(path, []byte("include \"missing.thrift\"\n\nstruct Holder {\n  1: missing.User user,\n}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var out, errb bytes.Buffer
+	code := run(context.Background(), strings.NewReader(""), &out, &errb, []string{path})
+	if code != exitIssues {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", code, exitIssues, errb.String())
+	}
+	if !strings.Contains(errb.String(), string(lint.DiagnosticIncludeTargetUnknown)) {
+		t.Fatalf("stderr missing %s: %q", lint.DiagnosticIncludeTargetUnknown, errb.String())
+	}
+}
+
+func TestRunStdinDefaultsToCrossFileOff(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	assumePath := filepath.Join(root, "stdin.thrift")
+	src := "include \"missing.thrift\"\n\nstruct Holder {\n  1: missing.User user,\n}\n"
+
+	var out, errb bytes.Buffer
+	code := run(context.Background(), strings.NewReader(src), &out, &errb, []string{"--stdin", "--assume-filename", assumePath})
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", code, exitOK, errb.String())
+	}
+}
+
+func TestRunCrossFileWorkspaceRequiresRootForStdin(t *testing.T) {
+	t.Parallel()
+
+	var out, errb bytes.Buffer
+	code := run(context.Background(), strings.NewReader("struct S {}\n"), &out, &errb, []string{"--stdin", "--cross-file", "workspace", "--assume-filename", "stdin.thrift"})
+	if code != exitInternal {
+		t.Fatalf("exit code = %d, want %d", code, exitInternal)
+	}
+	if !strings.Contains(errb.String(), "--workspace-root is required") {
+		t.Fatalf("stderr missing workspace-root validation: %q", errb.String())
 	}
 }
