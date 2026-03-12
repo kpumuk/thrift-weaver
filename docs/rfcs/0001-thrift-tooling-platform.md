@@ -1,4 +1,4 @@
-# RFC 0001: Weaver for Apache Thift Tooling Platform (`thriftfmt`, `thriftlint`, `thriftls`, VS Code Extension)
+# RFC 0001: Weaver for Apache Thrift Tooling Platform (`thriftfmt`, `thriftlint`, `thriftls`, VS Code Extension)
 
 - Status: Accepted
 - Authors: Dmytro Shteflyuk
@@ -7,7 +7,7 @@
 
 ## Summary
 
-This RFC proposes **Weaver for Apache Thift**, a standalone tooling project for Apache Thrift IDL editing and formatting, consisting of:
+This RFC proposes **Weaver for Apache Thrift**, a standalone tooling project for Apache Thrift IDL editing and formatting, consisting of:
 
 - `thriftfmt`: a stable, lossless-aware formatter for `.thrift` files
 - `thriftlint`: a diagnostics-oriented linter for `.thrift` files
@@ -16,7 +16,7 @@ This RFC proposes **Weaver for Apache Thift**, a standalone tooling project for 
 
 The project will be implemented primarily in Go and designed around a reusable syntax/formatting engine. Parsing will use a `tree-sitter` grammar (for incremental, error-tolerant parsing suitable for LSP) plus a custom lossless lexer/token-trivia layer (for formatter fidelity).
 
-The public product name is **Weaver for Apache Thift**. Repository and module identifiers remain `thrift-weaver`.
+The public product name is **Weaver for Apache Thrift**. Repository and module identifiers remain `thrift-weaver`.
 
 ## Motivation
 

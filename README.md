@@ -1,6 +1,6 @@
 <h3 align="center">
 	<img src="https://raw.githubusercontent.com/kpumuk/thrift-weaver/main/editors/vscode/media/icon.png" width="128" alt="Logo"/><br/>
-	Weaver for Apache Thift<br/>
+	Weaver for Apache Thrift<br/>
     Linter, Formatter, LSP Server and a <a href="https://code.visualstudio.com">VS Code</a> Extension
 </h3>
 
@@ -10,10 +10,10 @@
     <a href="https://github.com/kpumuk/thrift-weaver/contributors"><img src="https://img.shields.io/github/contributors/kpumuk/thrift-weaver?colorA=363a4f&colorB=a6da95&style=for-the-badge"></a>
 </p>
 
-**Weaver for Apache Thift** helps you write and format Apache Thrift IDL files.
+**Weaver for Apache Thrift** helps you write and format Apache Thrift IDL files.
 
 > [!NOTE]
-> **Weaver for Apache Thift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation. Repository names, module paths, and extension identifiers currently use `thrift-weaver`.
+> **Weaver for Apache Thrift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation. Repository names, module paths, and extension identifiers currently use `thrift-weaver`.
 
 It has three parts:
 
@@ -29,7 +29,7 @@ All three binaries are pure Go (`CGO_ENABLED=0`) and embed the Apache Thrift gra
 > [!IMPORTANT]
 > Read [RFC 0001](docs/rfcs/0001-thrift-tooling-platform.md) before code changes. If behavior or policy changes, update the RFC in the same PR.
 
-## Why Use Weaver for Apache Thift
+## Why Use Weaver for Apache Thrift
 
 - One stack for CLI and editor use.
 - Safe mode: if format is not safe, the tool returns an error.

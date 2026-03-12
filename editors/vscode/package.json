@@ -1,6 +1,6 @@
 {
   "name": "thrift-weaver-vscode",
-  "displayName": "Weaver for Apache Thift",
+  "displayName": "Weaver for Apache Thrift",
   "description": "Thrift language support for VS Code",
   "repository": {
     "type": "git",
@@ -70,7 +70,7 @@
     "commands": [
       {
         "command": "thrift.restartLanguageServer",
-        "title": "Weaver for Apache Thift: Restart Language Server"
+        "title": "Weaver for Apache Thrift: Restart Language Server"
       }
     ],
     "configurationDefaults": {
@@ -81,7 +81,7 @@
       }
     },
     "configuration": {
-      "title": "Weaver for Apache Thift",
+      "title": "Weaver for Apache Thrift",
       "properties": {
         "thrift.server.path": {
           "type": "string",

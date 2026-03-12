@@ -1,6 +1,6 @@
 # User Guide
 
-**Weaver for Apache Thift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation.
+**Weaver for Apache Thrift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation.
 
 Repository, module, and extension package identifiers currently use `thrift-weaver` / `thrift-weaver-vscode`.
 
@@ -313,15 +313,15 @@ Extension defaults for Apache Thrift files:
 - folding ranges
 - selection ranges
 - semantic tokens
-- `Weaver for Apache Thift: Restart Language Server` command
+- `Weaver for Apache Thrift: Restart Language Server` command
 
 ### Troubleshooting
 
 If the extension command is missing or features are not working:
 
 1. Check the current extension output channels:
-   - `Weaver for Apache Thift`
-   - `Weaver for Apache Thift LSP Trace`
+   - `Weaver for Apache Thrift`
+   - `Weaver for Apache Thrift LSP Trace`
 2. Confirm `thrift.server.path` points to an existing `thriftls` binary
 3. Run `Developer: Reload Window`
 4. Ensure the file language mode is `Thrift`

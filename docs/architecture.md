@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document summarizes the current architecture and code ownership boundaries for the **Weaver for Apache Thift**.
+This document summarizes the current architecture and code ownership boundaries for the **Weaver for Apache Thrift**.
 
 The RFC remains the source of truth for product and behavior decisions:
 

@@ -1,4 +1,4 @@
-// Package main runs reproducible parse/format and LSP memory stability measurements for Weaver for Apache Thift.
+// Package main runs reproducible parse/format and LSP memory stability measurements for Weaver for Apache Thrift.
 package main
 
 import (
@@ -707,7 +707,7 @@ func nanosToMS(ns int64) float64 {
 }
 
 func printReport(rep report) {
-	fmt.Printf("Weaver for Apache Thift Performance Report\n")
+	fmt.Printf("Weaver for Apache Thrift Performance Report\n")
 	fmt.Printf("Generated: %s\n", rep.GeneratedAt.Format(time.RFC3339))
 	fmt.Printf("Go: %s | %s/%s | CPUs=%d\n", rep.GoVersion, rep.GOOS, rep.GOARCH, rep.CPUs)
 	if ext, ok := rep.Config["external_thrift_root"].(string); ok && ext != "" {

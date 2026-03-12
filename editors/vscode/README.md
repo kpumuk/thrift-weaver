@@ -9,10 +9,10 @@
     <a href="https://github.com/kpumuk/thrift-weaver/contributors"><img src="https://img.shields.io/github/contributors/kpumuk/thrift-weaver?colorA=363a4f&colorB=a6da95&style=for-the-badge"></a>
 </p>
 
-**Weaver for Apache Thift** adds Apache Thrift support to VS Code.
+**Weaver for Apache Thrift** adds Apache Thrift support to VS Code.
 
 > [!NOTE]
-> **Weaver for Apache Thift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation. The extension identifier is `kpumuk.thrift-weaver-vscode`.
+> **Weaver for Apache Thrift** is an independent project for Apache Thrift tooling. Apache Thrift is a trademark of The Apache Software Foundation. The extension identifier is `kpumuk.thrift-weaver-vscode`.
 
 ## Why This Extension
 
@@ -61,7 +61,7 @@ code --install-extension thrift-weaver-vscode-<version>.vsix --force
 - Folding ranges.
 - Selection ranges.
 - Semantic tokens.
-- Command: `Weaver for Apache Thift: Restart Language Server`.
+- Command: `Weaver for Apache Thrift: Restart Language Server`.
 
 ## Settings
 
@@ -118,9 +118,9 @@ Managed install flow:
 ### No errors or format
 
 1. Open Output panel and check the current channel names:
-   - `Weaver for Apache Thift`
-   - `Weaver for Apache Thift LSP Trace`
-2. Run **Weaver for Apache Thift: Restart Language Server**.
+   - `Weaver for Apache Thrift`
+   - `Weaver for Apache Thrift LSP Trace`
+2. Run **Weaver for Apache Thrift: Restart Language Server**.
 3. Confirm the mode is `Thrift`.
 4. If needed, set `thrift.server.path`.
 

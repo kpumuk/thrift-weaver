@@ -36,8 +36,8 @@ const thriftServerPathSettingsQuery = '@ext:kpumuk.thrift-weaver-vscode thrift.s
 const openSettingsAction = 'Open Settings';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  outputChannel = vscode.window.createOutputChannel('Weaver for Apache Thift');
-  traceChannel = vscode.window.createOutputChannel('Weaver for Apache Thift LSP Trace');
+  outputChannel = vscode.window.createOutputChannel('Weaver for Apache Thrift');
+  traceChannel = vscode.window.createOutputChannel('Weaver for Apache Thrift LSP Trace');
   context.subscriptions.push(outputChannel, traceChannel);
 
   logInfo('extension activated');
@@ -241,7 +241,7 @@ async function notifyMissingServerPath(managedInstallEnabled: boolean): Promise<
     ? 'Managed install was enabled but no server could be installed.'
     : 'Managed install is disabled.';
   const action = await vscode.window.showWarningMessage(
-    `Weaver for Apache Thift: set \`thrift.server.path\` to a thriftls binary to enable diagnostics and formatting. ${details}`,
+    `Weaver for Apache Thrift: set \`thrift.server.path\` to a thriftls binary to enable diagnostics and formatting. ${details}`,
     openSettingsAction,
   );
   await maybeOpenThriftServerPathSettings(action);
@@ -254,7 +254,7 @@ async function notifyServerStartFailure(message: string): Promise<void> {
 
 async function notifyManagedInstallFailure(message: string): Promise<void> {
   const action = await vscode.window.showErrorMessage(
-    `Weaver for Apache Thift: managed thriftls install failed: ${message}. Configure thrift.server.path as a fallback.`,
+    `Weaver for Apache Thrift: managed thriftls install failed: ${message}. Configure thrift.server.path as a fallback.`,
     openSettingsAction,
   );
   await maybeOpenThriftServerPathSettings(action);
@@ -262,7 +262,7 @@ async function notifyManagedInstallFailure(message: string): Promise<void> {
 
 async function notifyManagedInstallFallback(message: string, fallbackPath: string): Promise<void> {
   const action = await vscode.window.showWarningMessage(
-    `Weaver for Apache Thift: managed thriftls install failed (${message}). Using configured thrift.server.path: ${fallbackPath}.`,
+    `Weaver for Apache Thrift: managed thriftls install failed (${message}). Using configured thrift.server.path: ${fallbackPath}.`,
     openSettingsAction,
   );
   await maybeOpenThriftServerPathSettings(action);
