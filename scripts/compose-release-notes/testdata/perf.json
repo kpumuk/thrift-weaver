@@ -1,0 +1,29 @@
+{
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "cpus": 8,
+  "parse_bench": [
+    {
+      "set": "typical",
+      "stats": {
+        "p50_ms": 12.34,
+        "p95_ms": 45.67
+      }
+    }
+  ],
+  "format_bench": [
+    {
+      "set": "typical",
+      "stats": {
+        "p50_ms": 22.22,
+        "p95_ms": 88.88
+      }
+    }
+  ],
+  "memory": {
+    "heap_alloc_growth": 1024,
+    "heap_inuse_growth": 2048,
+    "unbounded_growth_hint": false
+  }
+}

@@ -24,9 +24,6 @@ jobs:
       - name: Install dependencies
         run: npm --prefix editors/vscode ci
 
-      - name: Set release version in extension manifest
-        run: npm --prefix editors/vscode version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
-
       - name: Compile extension
         run: npm --prefix editors/vscode run compile
 
@@ -50,11 +47,14 @@ jobs:
         working-directory: ${{ github.workspace }}
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
       id-token: write
       attestations: write
       artifact-metadata: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -73,8 +73,8 @@ jobs:
           name: vscode-vsix
           path: .release-extra
 
-      - name: Run GoReleaser (draft)
-        run: mise exec goreleaser -- goreleaser release --clean --draft
+      - name: Run GoReleaser
+        run: mise exec goreleaser -- goreleaser release --clean
 
       - name: Generate thriftls managed-install manifest
         run: |
@@ -105,6 +105,26 @@ jobs:
       - name: Generate release SBOM
         run: go run ./scripts/generate-sbom --version "${GITHUB_REF_NAME#v}" --output dist/sbom.cdx.json
 
+      - name: Generate performance report for release notes
+        run: |
+          mkdir -p .tmp
+          go run ./scripts/perf-report \
+            --iterations 10 \
+            --warmup 2 \
+            --memory-iterations 200 \
+            --memory-sample-every 20 \
+            --json .tmp/release-perf-report.json
+
+      - name: Compose final release notes
+        run: |
+          commit_sha="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+          go run ./scripts/compose-release-notes \
+            --repo "${GITHUB_REPOSITORY}" \
+            --commit "$commit_sha" \
+            --linux-note docs/linux-managed-binary-compatibility.md \
+            --perf-report .tmp/release-perf-report.json \
+            --output dist/release-notes.md
+
       - name: Generate artifact attestations (release artifacts)
         uses: actions/attest-build-provenance@v4
         with:
@@ -117,15 +137,30 @@ jobs:
             dist/vscode-release-metadata.json
             dist/sbom.cdx.json
 
-      - name: Upload manifest + metadata to draft release
+      - name: Upload manifest + metadata to GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          draft: true
           files: |
             dist/thriftls-manifest.json
             dist/vscode-release-metadata.json
             dist/sbom.cdx.json
+
+      - name: Update GitHub release notes
+        run: gh release edit "${GITHUB_REF_NAME}" --notes-file dist/release-notes.md
+
+      - name: Comment on released pull requests
+        run: |
+          prev_tag="$(git tag --sort=-version:refname | grep -vx "${GITHUB_REF_NAME}" | head -n1)"
+          if [ -z "$prev_tag" ]; then
+            exit 0
+          fi
+          go run ./scripts/notify-released-prs \
+            --repo "${GITHUB_REPOSITORY}" \
+            --from "$prev_tag" \
+            --to "${GITHUB_REF_NAME}" \
+            --release-tag "${GITHUB_REF_NAME}" \
+            --release-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}"
 
   publish-vscode-marketplace:
     name: publish-vscode-marketplace

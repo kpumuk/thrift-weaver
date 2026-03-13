@@ -48,7 +48,7 @@ depends = ["vscode-compile", "vscode-test"]
 [tasks.vscode-install-extension]
 description = "Compile and install VS Code extension"
 depends = ["vscode-compile"]
-run = "npm --prefix editors/vscode run package && code --install-extension editors/vscode/thrift-weaver-vscode-0.0.1.vsix --force"
+run = "version=$(node -p \"require('./editors/vscode/package.json').version\") && npm --prefix editors/vscode run package && code --install-extension \"editors/vscode/thrift-weaver-vscode-${version}.vsix\" --force"
 
 [tasks.grammars]
 description = "Regenerate tree-sitter parser and wasm grammar artifacts"

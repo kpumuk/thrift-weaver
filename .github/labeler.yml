@@ -1,0 +1,54 @@
+vscode:
+  - changed-files:
+      - any-glob-to-any-file:
+          - editors/vscode/**
+
+lsp:
+  - changed-files:
+      - any-glob-to-any-file:
+          - cmd/thriftls/**
+          - internal/lsp/**
+          - testdata/lsp/**
+
+formatter:
+  - changed-files:
+      - any-glob-to-any-file:
+          - cmd/thriftfmt/**
+          - internal/format/**
+          - testdata/format/**
+
+linter:
+  - changed-files:
+      - any-glob-to-any-file:
+          - cmd/thriftlint/**
+          - internal/lint/**
+
+release:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/release*.yml
+          - .github/workflows/*label*.yml
+          - .github/workflows/*semantic*.yml
+          - .goreleaser.yml
+          - docs/release.md
+          - release-please-config.json
+          - .release-please-manifest.json
+          - scripts/generate-release-manifest/**
+          - scripts/generate-vscode-release-metadata/**
+          - scripts/compose-release-notes/**
+          - scripts/notify-released-prs/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - README.md
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - go.mod
+          - go.sum
+          - editors/vscode/package.json
+          - editors/vscode/package-lock.json
+          - mise.toml
