@@ -33,7 +33,10 @@ jobs:
         run: |
           mkdir -p .tmp
           git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > .tmp/changed-files.txt
-          go run ./scripts/check-vscode-changelog --file-list .tmp/changed-files.txt
+          go run ./scripts/check-vscode-changelog \
+            --file-list .tmp/changed-files.txt \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
 
   lint-and-test:
     name: lint-and-test
