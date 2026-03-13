@@ -13,11 +13,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+
+## [v0.2.0] - 2026-03-13
+
+- No extension-specific user-visible changes in this release.
+
+
 ## [v0.1.1] - 2026-03-12
 
 ### Fixed
 
 - Corrected `Thift` to `Thrift` in extension-facing branding and copy.
+
 
 ## [v0.1.0] - 2026-03-11
 
@@ -35,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Surfaced duplicate field ID diagnostics through the shipped language server.
 
+
 ## [v0.0.5] - 2026-02-28
 
 ### Changed
@@ -42,11 +50,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Managed-install downloads now use pure-Go `thriftls` release artifacts, simplifying runtime portability.
 - No extension-specific user-visible changes in this release.
 
+
 ## [v0.0.4] - 2026-02-27
 
 ### Changed
 
 - Published the extension to Open VSX in addition to the existing distribution channels.
+
 
 ## [v0.0.3] - 2026-02-27
 
@@ -55,6 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Published the extension to the Visual Studio Marketplace.
 - Updated installation and documentation for marketplace-based installs.
 
+
 ## [v0.0.2] - 2026-02-27
 
 ### Added
@@ -62,6 +73,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added managed `thriftls` install with automatic download and checksum verification.
 - Added fallback to `thrift.server.path` when managed install is unavailable.
 - Added managed-install settings for enable/disable, manifest URL, and local insecure-HTTP testing.
+
 
 ## [v0.0.1] - 2026-02-25
 
@@ -75,7 +87,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Shipped extension packages as `.vsix` assets on GitHub releases.
 
-[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/kpumuk/thrift-weaver/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/kpumuk/thrift-weaver/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/kpumuk/thrift-weaver/compare/v0.0.5...v0.1.0
 [v0.0.5]: https://github.com/kpumuk/thrift-weaver/compare/v0.0.4...v0.0.5
