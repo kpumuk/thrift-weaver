@@ -13,10 +13,6 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
-    groups:
-      all:
-        patterns:
-          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -30,10 +26,6 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
-    groups:
-      all:
-        patterns:
-          - "*"
 
   - package-ecosystem: "npm"
     directory: "/editors/vscode"
@@ -47,7 +39,8 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
-    groups:
-      all:
-        patterns:
-          - "*"
+    ignore:
+      - dependency-name: "@types/vscode"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
