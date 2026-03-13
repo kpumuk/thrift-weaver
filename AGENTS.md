@@ -50,10 +50,13 @@ Notes:
 - Add tests with functional changes whenever practical.
 - If the RFC is underspecified for your task, stop and patch the RFC before continuing.
 
-## Commit Messages
+## PR Titles and Merge Policy
 
-- Use plain-English commit messages that match the existing repository style, for example `Add workspace indexing RFC`.
-- Do not use conventional-commit prefixes or scoped prefixes such as `docs:`, `lsp:`, `index:`, or similar forms.
+- Use Conventional Commit titles on pull requests, for example `feat(vscode): add managed install fallback`.
+- Allowed PR title types are `feat`, `fix`, `deps`, `docs`, `chore`, `refactor`, `test`, `build`, `ci`, and `revert`.
+- Use `!` in the PR title or a `BREAKING CHANGE:` footer when a release should take a breaking-version bump.
+- Pull requests are squash-merged, and the squash commit title should be the PR title.
+- Local commits inside the branch may stay free-form; release automation reads the merged squash commit title.
 
 ## Repository Layout (Early-Stage)
 

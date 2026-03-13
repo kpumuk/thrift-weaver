@@ -1080,8 +1080,11 @@ Recommended additions (required before beta):
 
 ### Versioning
 
-- SemVer across CLI and LSP server
-- VS Code extension version may track repo release; extension-managed `thriftls` versions are selected/pinned via manifest policy and extension compatibility rules
+- SemVer across CLI, LSP server, and VS Code extension
+- v1 uses a shared repo version; the VS Code extension version tracks the repo release version
+- Release versions are proposed by a bot-managed release PR derived from merged Conventional Commit-style PR titles
+- The release PR is the source of truth for version bumps; merging it creates the `vX.Y.Z` tag that starts the publish workflow
+- VS Code extension user-facing notes are maintained in `editors/vscode/CHANGELOG.md` under `Unreleased` and rolled into the released version during release preparation
 
 ## Milestones and Acceptance Criteria
 
@@ -1199,10 +1202,14 @@ Acceptance criteria:
    - Resolved for v1: keep implementation packages internal until post-beta; no public/stable Go library API commitment in v1.
 5. Invalid-code formatting policy in editors:
    - Resolved for v1: fail closed (no edits + explicit error) unless formatting is provably safe.
+6. Release orchestration:
+   - Resolved for v1: use release PR automation driven by Conventional Commit-style PR titles, then publish from the created `vX.Y.Z` tag.
+7. VS Code changelog ownership:
+   - Resolved for v1: keep a curated in-repo changelog for extension-user-visible changes and roll `Unreleased` into the released version during release preparation.
 
 Remaining non-blocking question (can be decided in M3/M4):
 
-6. Linux managed binary compatibility policy for VS Code extension:
+8. Linux managed binary compatibility policy for VS Code extension:
    - Resolved direction: follow managed install/distribution patterns rather than bundling.
    - Remaining detail (M3/M4): define Linux binary baseline(s) and fallback guidance (`glibc` floor and/or alternate artifacts).
 
@@ -1217,6 +1224,8 @@ These are narrower than the open questions above and directly block scaffolding 
 3. Resolved: use RFC v1 default style profile and preserve separators/deprecated spellings
 4. Resolved: LSP invalid-format behavior defaults to fail-closed
 5. Resolved: Windows `arm64` artifact publication is supported in the pure-Go release matrix
+6. Resolved: release automation reads Conventional Commit-style PR titles from squash merges; individual local commits remain unconstrained
+7. Resolved: the shared repo version also updates `editors/vscode/package.json` and the root package-lock metadata fields during release preparation
 
 ## Alternatives Considered
 

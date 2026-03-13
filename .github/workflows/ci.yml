@@ -14,6 +14,27 @@ env:
   CGO_ENABLED: "0"
 
 jobs:
+  vscode-changelog-policy:
+    name: vscode-changelog-policy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ./go.mod
+
+      - name: Check VS Code changelog policy
+        run: |
+          mkdir -p .tmp
+          git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > .tmp/changed-files.txt
+          go run ./scripts/check-vscode-changelog --file-list .tmp/changed-files.txt
+
   lint-and-test:
     name: lint-and-test
     runs-on: ubuntu-latest
@@ -87,7 +108,6 @@ jobs:
       - name: Build VS Code extension package (smoke)
         run: |
           npm --prefix editors/vscode ci
-          npm --prefix editors/vscode version 0.0.0-ci --no-git-tag-version
           npm --prefix editors/vscode run compile
           npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository
 
@@ -177,7 +197,6 @@ jobs:
             --vsix "$vsix_path" \
             --checksums dist/checksums.txt \
             --tool-version "$snapshot_version" \
-            --extension-version 0.0.0-ci \
             --output dist/vscode-release-metadata.json
 
           test -s dist/checksums.txt

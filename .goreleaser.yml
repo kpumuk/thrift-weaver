@@ -95,8 +95,6 @@ checksum:
       name_template: UNSIGNED-BETA-RELEASE-POLICY.md
 
 release:
-  draft: true
-  replace_existing_draft: true
   replace_existing_artifacts: true
   extra_files: *release_extra_files
 

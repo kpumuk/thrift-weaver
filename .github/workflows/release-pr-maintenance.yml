@@ -1,0 +1,49 @@
+name: release-pr-maintenance
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  rollup-vscode-changelog:
+    if: >-
+      startsWith(github.event.pull_request.title, 'chore: release ') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(join(github.event.pull_request.labels.*.name, ','), 'autorelease: pending')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ./go.mod
+
+      - name: Roll forward VS Code changelog
+        run: |
+          version="$(jq -r '.version' editors/vscode/package.json)"
+          go run ./scripts/update-vscode-changelog --version "v$version" --date "$(date -u +%F)" --path editors/vscode/CHANGELOG.md
+
+      - name: Commit changelog updates
+        run: |
+          if git diff --quiet -- editors/vscode/CHANGELOG.md; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add editors/vscode/CHANGELOG.md
+          git commit -m "chore: roll VS Code changelog for release"
+          git push
