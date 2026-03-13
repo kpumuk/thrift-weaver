@@ -52,6 +52,28 @@ func TestRenderPerformanceSummary(t *testing.T) {
 	}
 }
 
+func TestRenderPerformanceSummaryFallsBackWhenBenchmarksAreMissing(t *testing.T) {
+	src := []byte(`{
+  "go_version": "go1.26.1",
+  "goos": "linux",
+  "goarch": "amd64",
+  "cpus": 8,
+  "parse_bench": [],
+  "format_bench": [{"set":"typical","stats":{"p50_ms":22.22,"p95_ms":88.88}}],
+  "memory": {"heap_alloc_growth": 1024, "heap_inuse_growth": 2048, "unbounded_growth_hint": false}
+}`)
+	got, err := renderPerformanceSummary(src)
+	if err != nil {
+		t.Fatalf("renderPerformanceSummary error: %v", err)
+	}
+	if !strings.Contains(got, "Parse + diagnostics (typical): unavailable") {
+		t.Fatalf("missing parse fallback: %s", got)
+	}
+	if !strings.Contains(got, "Full document format (typical): p50 22.22 ms, p95 88.88 ms") {
+		t.Fatalf("missing format summary: %s", got)
+	}
+}
+
 func TestFetchReleasePRBody(t *testing.T) {
 	mergedAt := time.Now().UTC().Format(time.RFC3339)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
