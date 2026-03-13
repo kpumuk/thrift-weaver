@@ -186,27 +186,30 @@ func renderPerformanceSummary(src []byte) (string, error) {
 	if err := json.Unmarshal(src, &report); err != nil {
 		return "", fmt.Errorf("parse perf report: %w", err)
 	}
-	parseTypical, ok := findBench(report.ParseBench, "typical")
-	if !ok {
-		return "", errors.New("missing parse typical benchmark")
-	}
-	formatTypical, ok := findBench(report.FormatBench, "typical")
-	if !ok {
-		return "", errors.New("missing format typical benchmark")
-	}
-
-	growthHint := "no"
-	if report.Memory.UnboundedGrowthHint {
-		growthHint = "yes"
-	}
 
 	lines := []string{
 		fmt.Sprintf("- Baseline: %s/%s, Go %s, CPUs %d", report.GOOS, report.GOARCH, report.GoVersion, report.CPUs),
-		fmt.Sprintf("- Parse + diagnostics (typical): p50 %.2f ms, p95 %.2f ms", parseTypical.Stats.P50MS, parseTypical.Stats.P95MS),
-		fmt.Sprintf("- Full document format (typical): p50 %.2f ms, p95 %.2f ms", formatTypical.Stats.P50MS, formatTypical.Stats.P95MS),
-		fmt.Sprintf("- LSP memory loop: heap_alloc delta %d bytes, heap_inuse delta %d bytes, unbounded growth hint: %s", report.Memory.HeapAllocGrowth, report.Memory.HeapInuseGrowth, growthHint),
+		renderBenchSummary("Parse + diagnostics (typical)", report.ParseBench),
+		renderBenchSummary("Full document format (typical)", report.FormatBench),
+		renderMemorySummary(report.Memory),
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func renderBenchSummary(label string, reports []benchReport) string {
+	report, ok := findBench(reports, "typical")
+	if !ok {
+		return fmt.Sprintf("- %s: unavailable", label)
+	}
+	return fmt.Sprintf("- %s: p50 %.2f ms, p95 %.2f ms", label, report.Stats.P50MS, report.Stats.P95MS)
+}
+
+func renderMemorySummary(report memoryReport) string {
+	growthHint := "no"
+	if report.UnboundedGrowthHint {
+		growthHint = "yes"
+	}
+	return fmt.Sprintf("- LSP memory loop: heap_alloc delta %d bytes, heap_inuse delta %d bytes, unbounded growth hint: %s", report.HeapAllocGrowth, report.HeapInuseGrowth, growthHint)
 }
 
 func findBench(reports []benchReport, set string) (benchReport, bool) {
