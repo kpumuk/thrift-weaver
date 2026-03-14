@@ -54,6 +54,7 @@ type Server struct {
 	workspaceDiscoveryQueued  bool
 	workspaceDiscoveryReason  index.RebuildReason
 	workspaceLintMu           sync.Mutex
+	workspaceLintShuttingDown bool
 	workspaceLintJobs         map[string]lintJobState
 	workspaceLintWG           sync.WaitGroup
 
@@ -137,7 +138,7 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	defer func() {
 		s.cancelAllLintJobs()
 		s.lintWG.Wait()
-		s.cancelAllWorkspaceLintJobs()
+		s.beginWorkspaceLintShutdown()
 		s.workspaceLintWG.Wait()
 		s.closeWorkspaceManager()
 		s.detachRuntime()
@@ -1207,6 +1208,10 @@ func (s *Server) attachRuntime(ctx context.Context, out io.Writer) {
 	s.runCtx = ctx
 	s.output = out
 	s.mu.Unlock()
+
+	s.workspaceLintMu.Lock()
+	s.workspaceLintShuttingDown = false
+	s.workspaceLintMu.Unlock()
 }
 
 func (s *Server) detachRuntime() {
@@ -1350,6 +1355,11 @@ func (s *Server) scheduleWorkspaceLintPublishForURI(uri string) {
 	ctx, cancel := context.WithCancel(runCtx)
 
 	s.workspaceLintMu.Lock()
+	if s.workspaceLintShuttingDown {
+		s.workspaceLintMu.Unlock()
+		cancel()
+		return
+	}
 	if state := s.workspaceLintJobs[canonicalURI]; state.cancel != nil {
 		state.cancel()
 	}
@@ -1616,7 +1626,7 @@ func (s *Server) cancelAllLintJobs() {
 	clear(s.lintJobs)
 }
 
-func (s *Server) cancelAllWorkspaceLintJobs() {
+func (s *Server) beginWorkspaceLintShutdown() {
 	if s == nil {
 		return
 	}
@@ -1624,6 +1634,7 @@ func (s *Server) cancelAllWorkspaceLintJobs() {
 	s.workspaceLintMu.Lock()
 	defer s.workspaceLintMu.Unlock()
 
+	s.workspaceLintShuttingDown = true
 	for _, state := range s.workspaceLintJobs {
 		if state.cancel != nil {
 			state.cancel()
