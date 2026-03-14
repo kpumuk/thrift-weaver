@@ -592,6 +592,59 @@ func TestServerRunSuppressesStaleDebouncedLintDiagnostics(t *testing.T) {
 	}
 }
 
+func TestServerBeginWorkspaceLintShutdownPreventsNewJobs(t *testing.T) {
+	t.Parallel()
+
+	s := NewServer()
+	s.setLintDebounceForTesting(time.Hour)
+
+	uri := "file:///workspace-shutdown.thrift"
+	if _, err := s.store.Open(context.Background(), uri, 1, []byte("struct S {\n  1: string name,\n}\n")); err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+
+	s.attachRuntime(t.Context(), io.Discard)
+	defer s.detachRuntime()
+
+	s.scheduleWorkspaceLintPublishForURI(uri)
+
+	s.workspaceLintMu.Lock()
+	if got := len(s.workspaceLintJobs); got != 1 {
+		s.workspaceLintMu.Unlock()
+		t.Fatalf("workspaceLintJobs=%d, want 1", got)
+	}
+	if s.workspaceLintShuttingDown {
+		s.workspaceLintMu.Unlock()
+		t.Fatal("workspace lint shutdown should be false before teardown")
+	}
+	s.workspaceLintMu.Unlock()
+
+	s.beginWorkspaceLintShutdown()
+
+	waitDone := make(chan struct{})
+	go func() {
+		s.workspaceLintWG.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("workspace lint jobs did not stop after shutdown")
+	}
+
+	s.scheduleWorkspaceLintPublishForURI(uri)
+
+	s.workspaceLintMu.Lock()
+	defer s.workspaceLintMu.Unlock()
+	if !s.workspaceLintShuttingDown {
+		t.Fatal("workspace lint shutdown should remain enabled during teardown")
+	}
+	if got := len(s.workspaceLintJobs); got != 0 {
+		t.Fatalf("workspaceLintJobs=%d, want 0 after shutdown", got)
+	}
+}
+
 func TestServerRunPublishesCurrentParserDiagnosticsOnDidChangeFailure(t *testing.T) {
 	restoreBreaker := syntax.ResetBackendBreakerForTesting()
 	defer restoreBreaker()
