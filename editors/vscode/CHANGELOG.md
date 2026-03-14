@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+
+## [v0.3.0] - 2026-03-14
+
 ### Fixed
 
 - Avoided a `thriftls` shutdown race that could interrupt workspace diagnostics during extension use.
@@ -96,7 +99,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Shipped extension packages as `.vsix` assets on GitHub releases.
 
-[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.0...HEAD
+[v0.3.0]: https://github.com/kpumuk/thrift-weaver/compare/v0.2.1...v0.3.0
 [v0.2.1]: https://github.com/kpumuk/thrift-weaver/compare/v0.2.0...v0.2.1
 [v0.2.0]: https://github.com/kpumuk/thrift-weaver/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/kpumuk/thrift-weaver/compare/v0.1.0...v0.1.1
