@@ -138,7 +138,7 @@ jobs:
             dist/sbom.cdx.json
 
       - name: Upload manifest + metadata to GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: |
