@@ -153,8 +153,8 @@ jobs:
       - name: Upload manifest + metadata to GitHub release
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
-            dist/thriftls-manifest.json
-            dist/vscode-release-metadata.json
+            dist/thriftls-manifest.json \
+            dist/vscode-release-metadata.json \
             dist/sbom.cdx.json \
             --clobber
 
