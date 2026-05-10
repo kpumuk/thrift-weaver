@@ -34,6 +34,7 @@ type pullRequest struct {
 	Number   int        `json:"number"`
 	Title    string     `json:"title"`
 	Body     string     `json:"body"`
+	URL      string     `json:"html_url"`
 	MergedAt *time.Time `json:"merged_at"`
 }
 
@@ -250,5 +251,23 @@ func (g githubClient) fetchReleasePRBody(ctx context.Context, repo, commit strin
 			return strings.TrimSpace(pr.Body), nil
 		}
 	}
-	return "", errors.New("release pull request not found for tagged commit")
+	return renderAssociatedPRNotes(repo, pulls)
+}
+
+func renderAssociatedPRNotes(repo string, pulls []pullRequest) (string, error) {
+	var lines []string
+	for _, pr := range pulls {
+		if pr.MergedAt == nil {
+			continue
+		}
+		url := pr.URL
+		if url == "" {
+			url = fmt.Sprintf("https://github.com/%s/pull/%d", repo, pr.Number)
+		}
+		lines = append(lines, fmt.Sprintf("- %s ([#%d](%s))", pr.Title, pr.Number, url))
+	}
+	if len(lines) == 0 {
+		return "", errors.New("release pull request not found for tagged commit")
+	}
+	return "## Changes\n\n" + strings.Join(lines, "\n"), nil
 }
