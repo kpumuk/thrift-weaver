@@ -148,7 +148,7 @@ jobs:
           npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository
 
       - name: Upload VSIX artifact for release smoke
-        uses: actions/upload-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vscode-vsix-smoke
           path: editors/vscode/*.vsix
@@ -204,7 +204,7 @@ jobs:
         run: mise install
 
       - name: Download VSIX artifact
-        uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode-vsix-smoke
           path: .release-extra
@@ -252,7 +252,7 @@ jobs:
           test -s dist/sbom.cdx.json
 
       - name: Upload release integrity artifacts (smoke)
-        uses: actions/upload-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-integrity-smoke
           path: |
@@ -356,7 +356,7 @@ jobs:
 
       - name: Upload perf gate report
         if: always()
-        uses: actions/upload-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: perf-gate-report
           path: .tmp/perf-report.json
