@@ -99,6 +99,32 @@ func TestFetchReleasePRBody(t *testing.T) {
 	}
 }
 
+func TestFetchReleasePRBodyFallsBackToAssociatedPRSummary(t *testing.T) {
+	mergedAt := time.Now().UTC().Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/kpumuk/thrift-weaver/commits/def456/pulls" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"number":43,"title":"ci: fix release metadata upload","body":"ignored","html_url":"https://github.com/kpumuk/thrift-weaver/pull/43","merged_at":"` + mergedAt + `"}]`))
+	}))
+	defer server.Close()
+
+	client := githubClient{
+		baseURL: server.URL,
+		token:   "test-token",
+		client:  server.Client(),
+	}
+	got, err := client.fetchReleasePRBody(context.Background(), "kpumuk/thrift-weaver", "def456")
+	if err != nil {
+		t.Fatalf("fetchReleasePRBody error: %v", err)
+	}
+	want := "## Changes\n\n- ci: fix release metadata upload ([#43](https://github.com/kpumuk/thrift-weaver/pull/43))"
+	if got != want {
+		t.Fatalf("body=%q want %q", got, want)
+	}
+}
+
 func TestComposeReleaseNotes(t *testing.T) {
 	perfJSON, err := os.ReadFile("testdata/perf.json")
 	if err != nil {
