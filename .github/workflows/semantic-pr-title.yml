@@ -9,15 +9,22 @@ on:
       - reopened
 
 permissions:
-  issues: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: semantic-pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   validate:
+    name: validate
     runs-on: ubuntu-latest
+    permissions:
+      issues: write # Required to sync title-derived issue labels on the PR.
+      pull-requests: write # Required by semantic title validation and PR label sync.
     steps:
       - name: Validate PR title
-        uses: amannn/action-semantic-pull-request@v6
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -36,7 +43,7 @@ jobs:
             revert
 
       - name: Sync title-based labels
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

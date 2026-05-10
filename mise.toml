@@ -5,10 +5,16 @@ tree-sitter = "0.26.5"
 golangci-lint = "2.10.1"
 lefthook = "2.1.1"
 goreleaser = "2.14.0"
+actionlint = "1.7.12"
+zizmor = "1.24.1"
 
 [tasks.ci]
 description = "Run formatter, linters, and tests (Go + VS Code extension)"
 depends = ["format", "lint", "test", "vscode-ci"]
+
+[tasks.actions-lint]
+description = "Lint GitHub Actions workflows and Dependabot configuration"
+run = "actionlint && zizmor --pedantic ."
 
 [tasks.format]
 description = "Format Go code with golangci-lint formatters"

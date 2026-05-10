@@ -1,0 +1,12 @@
+rules:
+  dangerous-triggers:
+    ignore:
+      # pull_request_target is intentional here: the workflow never checks out
+      # or executes pull request code, and only applies repository labels.
+      - pr-labels.yml
+      # pull_request_target is intentional here: the workflow is guarded to
+      # same-repository release PRs before checking out and pushing changes.
+      - release-pr-maintenance.yml
+      # pull_request_target is intentional here: the workflow never checks out
+      # or executes pull request code, and only validates metadata/syncs labels.
+      - semantic-pr-title.yml
