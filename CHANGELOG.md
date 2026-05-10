@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/kpumuk/thrift-weaver/compare/v0.3.1...v0.3.2) (2026-05-10)
+
+
+### Bug Fixes
+
+* tolerate non-release PR tags in release notes ([#44](https://github.com/kpumuk/thrift-weaver/issues/44)) ([4c412a6](https://github.com/kpumuk/thrift-weaver/commit/4c412a659746d7ab7debfd72c517177ffe31a933))
+
 ## [0.3.1](https://github.com/kpumuk/thrift-weaver/compare/v0.3.0...v0.3.1) (2026-05-10)
 
 
