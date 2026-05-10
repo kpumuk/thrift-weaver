@@ -44,10 +44,12 @@ jobs:
             target: FuzzDocumentAndRange
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
@@ -60,12 +62,12 @@ jobs:
 
           profile="daily"
           fuzztime="2m"
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "29 4 * * 0" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "${GITHUB_EVENT_SCHEDULE}" = "29 4 * * 0" ]; then
             profile="weekly"
             fuzztime="10m"
           fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            profile="${{ inputs.profile }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            profile="${INPUTS_PROFILE}"
             case "$profile" in
               daily)  fuzztime="2m" ;;
               weekly) fuzztime="10m" ;;
@@ -79,6 +81,10 @@ jobs:
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
           echo "fuzztime=$fuzztime" >> "$GITHUB_OUTPUT"
           echo "Resolved profile=$profile fuzztime=$fuzztime"
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUTS_PROFILE: ${{ inputs.profile }}
 
       - name: Run fuzz target
         shell: bash
@@ -86,21 +92,25 @@ jobs:
           set -euo pipefail
 
           mkdir -p "$RUNNER_TEMP/fuzz-logs"
-          log_path="$RUNNER_TEMP/fuzz-logs/${{ matrix.id }}.log"
+          log_path="$RUNNER_TEMP/fuzz-logs/${FUZZ_ID}.log"
 
-          mise exec golang -- go test "${{ matrix.pkg }}" \
+          mise exec golang -- go test "${FUZZ_PKG}" \
             -run='^$' \
-            -fuzz="${{ matrix.target }}" \
-            -fuzztime="${{ steps.profile.outputs.fuzztime }}" \
+            -fuzz="${FUZZ_TARGET}" \
+            -fuzztime="${STEPS_PROFILE_OUTPUTS_FUZZTIME}" \
             2>&1 | tee "$log_path"
+        env:
+          FUZZ_ID: ${{ matrix.id }}
+          FUZZ_PKG: ${{ matrix.pkg }}
+          FUZZ_TARGET: ${{ matrix.target }}
+          STEPS_PROFILE_OUTPUTS_FUZZTIME: ${{ steps.profile.outputs.fuzztime }}
 
       - name: Upload fuzz crashers and logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nightly-fuzz-${{ steps.profile.outputs.profile }}-${{ matrix.id }}-${{ github.run_id }}
           path: |
             internal/**/testdata/fuzz/**
             ${{ runner.temp }}/fuzz-logs/*.log
           if-no-files-found: ignore
-

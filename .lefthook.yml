@@ -8,6 +8,15 @@ pre-push:
 pre-commit:
   fail_on_changes: "always"
   jobs:
+    - name: github actions lint
+      glob:
+        - ".github/dependabot.yml"
+        - ".github/workflows/**"
+        - ".github/zizmor.yml"
+        - ".lefthook.yml"
+        - "mise.toml"
+      run: mise run actions-lint
+
     - name: generate tree-sitter parser
       glob:
         - "grammar/tree-sitter-thrift/grammar.js"

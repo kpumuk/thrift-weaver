@@ -7,46 +7,73 @@ on:
   pull_request:
 
 permissions:
-  actions: write
   contents: read
 
 env:
   CGO_ENABLED: "0"
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@e639db99335bc9038abc0e066dfcd72e23d26fb4 # v0.3.0
+        with:
+          advanced-security: false
+          annotations: true
+          inputs: .github/workflows .github/dependabot.yml
+          persona: pedantic
+          version: 1.24.1
+
   vscode-changelog-policy:
     name: vscode-changelog-policy
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: ./go.mod
 
       - name: Check VS Code changelog policy
         run: |
           mkdir -p .tmp
-          git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > .tmp/changed-files.txt
+          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > .tmp/changed-files.txt
           go run ./scripts/check-vscode-changelog \
             --file-list .tmp/changed-files.txt \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head "${{ github.event.pull_request.head.sha }}"
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
   lint-and-test:
     name: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
@@ -68,10 +95,12 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: ./go.mod
 
@@ -85,10 +114,12 @@ jobs:
       CGO_ENABLED: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
@@ -101,10 +132,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22'
 
@@ -115,7 +148,7 @@ jobs:
           npm --prefix editors/vscode run package -- --no-yarn --allow-missing-repository
 
       - name: Upload VSIX artifact for release smoke
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: vscode-vsix-smoke
           path: editors/vscode/*.vsix
@@ -133,15 +166,17 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: ./go.mod
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22'
 
@@ -157,18 +192,19 @@ jobs:
     needs: package-vscode-extension-smoke
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
 
       - name: Download VSIX artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: vscode-vsix-smoke
           path: .release-extra
@@ -195,7 +231,7 @@ jobs:
             --checksums dist/checksums.txt \
             --output dist/thriftls-manifest.json
 
-          vsix_path="$(ls .release-extra/*.vsix | head -n1)"
+          vsix_path="$(find .release-extra -maxdepth 1 -name '*.vsix' -print -quit)"
           go run ./scripts/generate-vscode-release-metadata \
             --vsix "$vsix_path" \
             --checksums dist/checksums.txt \
@@ -216,7 +252,7 @@ jobs:
           test -s dist/sbom.cdx.json
 
       - name: Upload release integrity artifacts (smoke)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-integrity-smoke
           path: |
@@ -231,17 +267,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
 
       - name: Restore previous perf state
         if: github.event_name == 'push'
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .tmp/perf-gate-state.env
           key: perf-gate-${{ github.ref_name }}-${{ github.run_id }}
@@ -292,11 +330,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p .tmp
-          printf 'PERF_GATE_BREACH=%s\n' "${{ steps.current-perf.outputs.current-breach }}" > .tmp/perf-gate-state.env
+          printf 'PERF_GATE_BREACH=%s\n' "${STEPS_CURRENT_PERF_OUTPUTS_CURRENT_BREACH}" > .tmp/perf-gate-state.env
+        env:
+          STEPS_CURRENT_PERF_OUTPUTS_CURRENT_BREACH: ${{ steps.current-perf.outputs.current-breach }}
 
       - name: Save current perf state
         if: github.event_name == 'push' && always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .tmp/perf-gate-state.env
           key: perf-gate-${{ github.ref_name }}-${{ github.run_id }}
@@ -304,14 +344,19 @@ jobs:
       - name: Enforce perf policy
         run: |
           go run ./scripts/evaluate-perf-policy \
-            --event-name "${{ github.event_name }}" \
-            --current-breach="${{ steps.current-perf.outputs.current-breach }}" \
-            --previous-known="${{ steps.previous-perf.outputs.previous-known }}" \
-            --previous-breach="${{ steps.previous-perf.outputs.previous-breach }}"
+            --event-name "${GITHUB_EVENT_NAME}" \
+            --current-breach="${STEPS_CURRENT_PERF_OUTPUTS_CURRENT_BREACH}" \
+            --previous-known="${STEPS_PREVIOUS_PERF_OUTPUTS_PREVIOUS_KNOWN}" \
+            --previous-breach="${STEPS_PREVIOUS_PERF_OUTPUTS_PREVIOUS_BREACH}"
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          STEPS_CURRENT_PERF_OUTPUTS_CURRENT_BREACH: ${{ steps.current-perf.outputs.current-breach }}
+          STEPS_PREVIOUS_PERF_OUTPUTS_PREVIOUS_KNOWN: ${{ steps.previous-perf.outputs.previous-known }}
+          STEPS_PREVIOUS_PERF_OUTPUTS_PREVIOUS_BREACH: ${{ steps.previous-perf.outputs.previous-breach }}
 
       - name: Upload perf gate report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: perf-gate-report
           path: .tmp/perf-report.json
@@ -322,10 +367,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
@@ -342,10 +389,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install
@@ -369,10 +418,12 @@ jobs:
       THRIFT_ORACLE_VERSION_PREFIX: ${{ vars.THRIFT_ORACLE_VERSION_PREFIX }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up mise
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
 
       - name: Install pinned tools
         run: mise install

@@ -6,16 +6,23 @@ on:
       - main
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release-please:
+    name: release-please
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required by release-please to create release commits and tags.
+      issues: write # Required by release-please to update linked release issues.
+      pull-requests: write # Required by release-please to create and update release PRs.
     steps:
       - name: Run release-please
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           manifest-file: .release-please-manifest.json

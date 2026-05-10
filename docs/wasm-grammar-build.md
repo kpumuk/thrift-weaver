@@ -7,7 +7,7 @@ This document defines the reproducible grammar artifact pipeline for wasm parser
 Toolchain versions are pinned in [mise.toml](/Users/dmytro/work/github/thrift-weaver/mise.toml):
 
 - `tree-sitter = 0.26.5`
-- `golang = 1.26.1`
+- `golang = 1.26.3`
 - `node = 22.14.0`
 
 `tree-sitter build --wasm` downloads a pinned `wasi-sdk` toolchain on first run (currently `wasi-sdk-29` under `~/.cache/tree-sitter`).

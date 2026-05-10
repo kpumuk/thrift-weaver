@@ -9,25 +9,33 @@ on:
       - reopened
 
 permissions:
-  contents: write
-  pull-requests: read
+  contents: read
+
+concurrency:
+  group: release-pr-maintenance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   rollup-vscode-changelog:
+    name: rollup-vscode-changelog
     if: >-
       startsWith(github.event.pull_request.title, 'chore: release ') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(join(github.event.pull_request.labels.*.name, ','), 'autorelease: pending')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to push changelog updates to release PR branches.
+      pull-requests: read # Required to inspect release PR metadata before changelog updates.
     steps:
       - name: Checkout release PR branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          persist-credentials: true
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: ./go.mod
 
