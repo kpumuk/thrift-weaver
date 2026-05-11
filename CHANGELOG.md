@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...v0.3.3) (2026-05-11)
+
+
+### Dependencies
+
+* **deps-dev:** bump esbuild from 0.27.4 to 0.28.0 in /editors/vscode ([#46](https://github.com/kpumuk/thrift-weaver/issues/46)) ([343e94c](https://github.com/kpumuk/thrift-weaver/commit/343e94cec0b631e0027eecb5e5080094570aa869))
+
 ## [0.3.2](https://github.com/kpumuk/thrift-weaver/compare/v0.3.1...v0.3.2) (2026-05-10)
 
 
