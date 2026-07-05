@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated language-client wiring for `vscode-languageclient` 10 compatibility.
+
 
 ## [v0.3.2] - 2026-05-10
 

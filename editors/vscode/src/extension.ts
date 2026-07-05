@@ -8,7 +8,7 @@ import {
   StateChangeEvent,
   Trace,
   TransportKind,
-} from 'vscode-languageclient/node.js';
+} from 'vscode-languageclient/node';
 import { installManagedThriftls } from './managedInstall';
 import { resolveServerPath } from './serverPathResolver';
 import { buildServerArgs } from './serverArgs';
@@ -26,8 +26,8 @@ type ThriftConfig = {
   managedAllowInsecureHTTP: boolean;
 };
 
-let outputChannel: vscode.OutputChannel | undefined;
-let traceChannel: vscode.OutputChannel | undefined;
+let outputChannel: vscode.LogOutputChannel | undefined;
+let traceChannel: vscode.LogOutputChannel | undefined;
 let client: LanguageClient | undefined;
 let lifecycleChain: Promise<void> = Promise.resolve();
 let warnedMissingServerPath = false;
@@ -36,8 +36,8 @@ const thriftServerPathSettingsQuery = '@ext:kpumuk.thrift-weaver-vscode thrift.s
 const openSettingsAction = 'Open Settings';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  outputChannel = vscode.window.createOutputChannel('Weaver for Apache Thrift');
-  traceChannel = vscode.window.createOutputChannel('Weaver for Apache Thrift LSP Trace');
+  outputChannel = vscode.window.createOutputChannel('Weaver for Apache Thrift', { log: true });
+  traceChannel = vscode.window.createOutputChannel('Weaver for Apache Thrift LSP Trace', { log: true });
   context.subscriptions.push(outputChannel, traceChannel);
 
   logInfo('extension activated');
