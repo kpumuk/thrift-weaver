@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+
+## [v0.3.3] - 2026-07-05
+
 ### Fixed
 
 - Updated language-client wiring for `vscode-languageclient` 10 compatibility.
@@ -115,7 +118,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Shipped extension packages as `.vsix` assets on GitHub releases.
 
-[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.3...HEAD
+[v0.3.3]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...v0.3.3
 [v0.3.2]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.1...v0.3.2
 [v0.3.1]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/kpumuk/thrift-weaver/compare/v0.2.1...v0.3.0

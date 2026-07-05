@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.3.3](https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...v0.3.3) (2026-07-05)
+
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 25.6.0 to 25.6.2 in /editors/vscode ([#48](https://github.com/kpumuk/thrift-weaver/issues/48)) ([a523135](https://github.com/kpumuk/thrift-weaver/commit/a523135ba5a491d347539191c57dab7fba664d52))
+* **deps-dev:** bump @types/node from 25.6.2 to 25.9.0 in /editors/vscode ([#52](https://github.com/kpumuk/thrift-weaver/issues/52)) ([420e5ff](https://github.com/kpumuk/thrift-weaver/commit/420e5ff3ad937ba213574c16a9687cc1028ecca5))
+* **deps-dev:** bump @types/node from 25.9.0 to 25.9.1 in /editors/vscode ([#53](https://github.com/kpumuk/thrift-weaver/issues/53)) ([30dc7e5](https://github.com/kpumuk/thrift-weaver/commit/30dc7e57c8f24be631c6277a55da5a7e887b1923))
+* **deps-dev:** bump @types/node from 25.9.1 to 26.0.1 in /editors/vscode ([#60](https://github.com/kpumuk/thrift-weaver/issues/60)) ([c2e7c33](https://github.com/kpumuk/thrift-weaver/commit/c2e7c33b047508d6f27e47c2900e9b72b343d98b))
+* **deps-dev:** bump @vscode/vsce from 3.9.1 to 3.9.2 in /editors/vscode ([#61](https://github.com/kpumuk/thrift-weaver/issues/61)) ([151ff19](https://github.com/kpumuk/thrift-weaver/commit/151ff19b66dd42137f4e4738fafe3cac1f64ae46))
+* **deps-dev:** bump esbuild from 0.27.4 to 0.28.0 in /editors/vscode ([#46](https://github.com/kpumuk/thrift-weaver/issues/46)) ([343e94c](https://github.com/kpumuk/thrift-weaver/commit/343e94cec0b631e0027eecb5e5080094570aa869))
+* **deps-dev:** bump tsx from 4.21.0 to 4.22.1 in /editors/vscode ([#51](https://github.com/kpumuk/thrift-weaver/issues/51)) ([58f69be](https://github.com/kpumuk/thrift-weaver/commit/58f69be9b0d8f4a83750d5be4ebfaa983e4b0edd))
+* **deps-dev:** bump tsx from 4.22.1 to 4.22.3 in /editors/vscode ([#54](https://github.com/kpumuk/thrift-weaver/issues/54)) ([1225159](https://github.com/kpumuk/thrift-weaver/commit/1225159f2aeaf73b9e3c51d65b86c71cab2d960f))
+* **deps-dev:** bump tsx from 4.22.3 to 4.22.4 in /editors/vscode ([#56](https://github.com/kpumuk/thrift-weaver/issues/56)) ([78aef5a](https://github.com/kpumuk/thrift-weaver/commit/78aef5a64ff5ef70fe69c41b6ac6d5ef9ba49302))
+* **deps:** bump actions/checkout from 6.0.2 to 7.0.0 ([#63](https://github.com/kpumuk/thrift-weaver/issues/63)) ([ce10c29](https://github.com/kpumuk/thrift-weaver/commit/ce10c292eb6559a9682e66535da0f9fa6a753136))
+* **deps:** bump github.com/tetratelabs/wazero from 1.11.0 to 1.12.0 ([#55](https://github.com/kpumuk/thrift-weaver/issues/55)) ([e409870](https://github.com/kpumuk/thrift-weaver/commit/e409870074995b438f8df92e2f295bb8807a35c7))
+* **deps:** bump jdx/mise-action from 4.0.1 to 4.2.0 ([#64](https://github.com/kpumuk/thrift-weaver/issues/64)) ([ad97e9a](https://github.com/kpumuk/thrift-weaver/commit/ad97e9ab4d73d6db931314fcde79601c4d62258c))
+* **deps:** bump tar from 7.5.13 to 7.5.15 in /editors/vscode ([#49](https://github.com/kpumuk/thrift-weaver/issues/49)) ([8deed8e](https://github.com/kpumuk/thrift-weaver/commit/8deed8ef67fe6e1602024323759344accb0e8d7e))
+* **deps:** bump tar from 7.5.15 to 7.5.19 in /editors/vscode ([#58](https://github.com/kpumuk/thrift-weaver/issues/58)) ([13bcfb2](https://github.com/kpumuk/thrift-weaver/commit/13bcfb2b301f93335114d080cb56c05a4e8abb8d))
+* **deps:** bump vscode-languageclient from 9.0.1 to 10.0.1 in /editors/vscode ([#59](https://github.com/kpumuk/thrift-weaver/issues/59)) ([6b79abc](https://github.com/kpumuk/thrift-weaver/commit/6b79abcf5fec80c27dd01a980f38eedef4aed3eb))
+* **deps:** bump zizmorcore/zizmor-action from 0.5.3 to 0.5.6 ([#50](https://github.com/kpumuk/thrift-weaver/issues/50)) ([85853fd](https://github.com/kpumuk/thrift-weaver/commit/85853fddc999996bb9d367add79f49e6ba8d8175))
+* **deps:** bump zizmorcore/zizmor-action from 0.5.6 to 0.5.7 ([#65](https://github.com/kpumuk/thrift-weaver/issues/65)) ([902aa7d](https://github.com/kpumuk/thrift-weaver/commit/902aa7d99229aa228701452b9ca54df0a562cd72))
+
 ## [0.3.2](https://github.com/kpumuk/thrift-weaver/compare/v0.3.1...v0.3.2) (2026-05-10)
 
 
