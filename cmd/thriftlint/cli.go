@@ -13,10 +13,10 @@ import (
 	"slices"
 	"strings"
 
+	cliutil "github.com/kpumuk/thrift-weaver/internal/cli"
 	"github.com/kpumuk/thrift-weaver/internal/index"
 	"github.com/kpumuk/thrift-weaver/internal/lint"
 	"github.com/kpumuk/thrift-weaver/internal/syntax"
-	"github.com/kpumuk/thrift-weaver/internal/text"
 )
 
 const (
@@ -260,7 +260,7 @@ func isSupportedOutputFormat(v string) bool {
 func writeDiagnosticsOutput(format string, stdout, stderr io.Writer, tree *syntax.Tree, diags []syntax.Diagnostic) error {
 	switch format {
 	case outputFormatText:
-		writeDiagnostics(stderr, tree, diags)
+		cliutil.WriteDiagnostics(stderr, "thriftlint", tree, diags, cliutil.DefaultDiagnosticMessage)
 		return nil
 	case outputFormatJSON:
 		return writeJSONDiagnostics(stdout, tree, diags)
@@ -311,28 +311,6 @@ func filePathFromURI(raw string) (string, error) {
 	return filepath.Clean(filepath.FromSlash(u.Path)), nil
 }
 
-func writeDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnostic) {
-	if len(diags) == 0 {
-		return
-	}
-	li := lineIndexOrBuild(tree)
-	uri := ""
-	if tree != nil {
-		uri = tree.URI
-	}
-	for i, d := range diags {
-		if i > 0 {
-			writeln(w)
-		}
-		prefix := "thriftlint"
-		if uri != "" {
-			prefix = uri
-		}
-		writeDiagnosticHeader(w, prefix, li, d)
-		writeDiagnosticSnippet(w, tree, li, d)
-	}
-}
-
 func isSupportedCrossFileMode(v string) bool {
 	switch v {
 	case crossFileOff, crossFileTransitive, crossFileWorkspace:
@@ -367,144 +345,15 @@ func (f *multiStringFlag) Set(v string) error {
 	return nil
 }
 
-func lineIndexOrBuild(tree *syntax.Tree) *text.LineIndex {
-	if tree == nil {
-		return nil
-	}
-	if tree.LineIndex != nil {
-		return tree.LineIndex
-	}
-	return text.NewLineIndex(tree.Source)
-}
-
-func writeDiagnosticHeader(w io.Writer, prefix string, li *text.LineIndex, d syntax.Diagnostic) {
-	loc := d.Span.String()
-	if li != nil && d.Span.Start.IsValid() {
-		if p, err := li.OffsetToPoint(d.Span.Start); err == nil {
-			loc = fmt.Sprintf("%d:%d", p.Line+1, p.Column+1)
-		}
-	}
-	writef(
-		w,
-		"%s:%s: %s: %s/%s: %s\n",
-		prefix,
-		loc,
-		diagnosticSeverityLetter(d.Severity),
-		d.Source,
-		d.Code,
-		d.Message,
-	)
-}
-
-func writeDiagnosticSnippet(w io.Writer, tree *syntax.Tree, li *text.LineIndex, d syntax.Diagnostic) {
-	if tree == nil || li == nil || !d.Span.Start.IsValid() {
-		return
-	}
-
-	startPoint, err := li.OffsetToPoint(d.Span.Start)
-	if err != nil {
-		return
-	}
-	lineStart, lineText, ok := sourceLineAt(tree.Source, d.Span.Start)
-	if !ok {
-		return
-	}
-	startCol := min(max(int(d.Span.Start-lineStart), 0), len(lineText))
-	caretWidth := diagnosticCaretWidth(li, d, startPoint.Line, len(lineText), lineStart)
-	caretPrefix := caretPrefixForLine(lineText, startCol)
-
-	writeln(w, string(lineText))
-	writeString(w, caretPrefix)
-	writeString(w, strings.Repeat("^", caretWidth))
-	writeln(w)
-}
-
-func diagnosticCaretWidth(li *text.LineIndex, d syntax.Diagnostic, startLine int, lineLen int, lineStart text.ByteOffset) int {
-	if lineLen == 0 {
-		return 1
-	}
-	if !d.Span.End.IsValid() || d.Span.End <= d.Span.Start {
-		return 1
-	}
-
-	end := min(d.Span.End, li.SourceLen())
-	endPoint, err := li.OffsetToPoint(end)
-	if err != nil {
-		return 1
-	}
-
-	startCol := min(max(int(d.Span.Start-lineStart), 0), lineLen)
-	if endPoint.Line != startLine {
-		if startCol >= lineLen {
-			return 1
-		}
-		return lineLen - startCol
-	}
-	endCol := endPoint.Column
-	if endCol < startCol {
-		return 1
-	}
-	if endCol > lineLen {
-		endCol = lineLen
-	}
-	if endCol == startCol {
-		return 1
-	}
-	return endCol - startCol
-}
-
-func sourceLineAt(src []byte, off text.ByteOffset) (text.ByteOffset, []byte, bool) {
-	if !off.IsValid() {
-		return 0, nil, false
-	}
-	i := int(off)
-	if i < 0 || i > len(src) {
-		return 0, nil, false
-	}
-
-	start := i
-	for start > 0 && src[start-1] != '\n' {
-		start--
-	}
-	end := i
-	for end < len(src) && src[end] != '\n' {
-		end++
-	}
-	if end > start && src[end-1] == '\r' {
-		end--
-	}
-
-	return text.ByteOffset(start), src[start:end], true
-}
-
-func caretPrefixForLine(line []byte, col int) string {
-	if col <= 0 {
-		return ""
-	}
-	if col > len(line) {
-		col = len(line)
-	}
-	var b strings.Builder
-	b.Grow(col)
-	for _, ch := range line[:col] {
-		if ch == '\t' {
-			b.WriteByte('\t')
-			continue
-		}
-		b.WriteByte(' ')
-	}
-	return b.String()
-}
-
 func writeJSONDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnostic) error {
-	li := lineIndexOrBuild(tree)
+	li := cliutil.LineIndexOrBuild(tree)
 	uri := ""
 	if tree != nil {
 		uri = tree.URI
 	}
 	payload := make([]diagnosticJSON, 0, len(diags))
 	for _, d := range diags {
-		start, end, err := diagnosticPoints(li, d.Span)
+		start, end, err := cliutil.DiagnosticPoints(li, d.Span)
 		if err != nil {
 			return err
 		}
@@ -512,7 +361,7 @@ func writeJSONDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnos
 			URI:       uri,
 			Source:    d.Source,
 			Code:      string(d.Code),
-			Severity:  diagnosticSeverityName(d.Severity),
+			Severity:  cliutil.SeverityName(d.Severity),
 			Message:   d.Message,
 			StartLine: start.Line + 1,
 			StartCol:  start.Column + 1,
@@ -527,78 +376,7 @@ func writeJSONDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnos
 	return enc.Encode(payload)
 }
 
-func diagnosticPoints(li *text.LineIndex, sp text.Span) (text.Point, text.Point, error) {
-	if li == nil {
-		return text.Point{}, text.Point{}, errors.New("nil line index")
-	}
-	clamped := clampSpanToSource(sp, li.SourceLen())
-	start, err := li.OffsetToPoint(clamped.Start)
-	if err != nil {
-		return text.Point{}, text.Point{}, err
-	}
-	end, err := li.OffsetToPoint(clamped.End)
-	if err != nil {
-		return text.Point{}, text.Point{}, err
-	}
-	return start, end, nil
-}
-
-func clampSpanToSource(sp text.Span, srcLen text.ByteOffset) text.Span {
-	if !sp.Start.IsValid() {
-		sp.Start = 0
-	}
-	if !sp.End.IsValid() {
-		sp.End = sp.Start
-	}
-	if sp.Start > srcLen {
-		sp.Start = srcLen
-	}
-	if sp.End > srcLen {
-		sp.End = srcLen
-	}
-	if sp.End < sp.Start {
-		sp.End = sp.Start
-	}
-	return sp
-}
-
-func diagnosticSeverityLetter(s syntax.Severity) string {
-	switch s {
-	case syntax.SeverityError:
-		return "E"
-	case syntax.SeverityWarning:
-		return "W"
-	case syntax.SeverityInfo:
-		return "I"
-	default:
-		return "E"
-	}
-}
-
-func diagnosticSeverityName(s syntax.Severity) string {
-	switch s {
-	case syntax.SeverityError:
-		return "error"
-	case syntax.SeverityWarning:
-		return "warning"
-	case syntax.SeverityInfo:
-		return "info"
-	default:
-		return "error"
-	}
-}
-
 func writef(w io.Writer, format string, args ...any) {
 	//nolint:gosec // Terminal/debug output helper; format strings are internal callsite constants.
 	_, _ = io.WriteString(w, fmt.Sprintf(format, args...))
-}
-
-func writeln(w io.Writer, args ...any) {
-	//nolint:gosec // Terminal/debug output helper.
-	_, _ = fmt.Fprintln(w, args...)
-}
-
-func writeString(w io.Writer, s string) {
-	//nolint:gosec // Terminal/debug output helper.
-	_, _ = io.WriteString(w, s)
 }
