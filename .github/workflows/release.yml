@@ -60,8 +60,8 @@ jobs:
       issues: write # Required by GoReleaser release integrations.
       pull-requests: write # Required by GoReleaser release integrations and release PR comments.
       id-token: write # Required by artifact provenance attestation.
-      attestations: write # Required by actions/attest-build-provenance.
-      artifact-metadata: write # Required by actions/attest-build-provenance.
+      attestations: write # Required by actions/attest.
+      artifact-metadata: write # Required by actions/attest.
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,7 +139,7 @@ jobs:
             --output dist/release-notes.md
 
       - name: Generate artifact attestations (release artifacts)
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: |
             dist/*.tar.gz
