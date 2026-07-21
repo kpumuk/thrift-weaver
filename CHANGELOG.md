@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.4](https://github.com/kpumuk/thrift-weaver/compare/v0.3.3...v0.3.4) (2026-07-21)
+
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 26.1.0 to 26.1.1 in /editors/vscode ([#76](https://github.com/kpumuk/thrift-weaver/issues/76)) ([768276b](https://github.com/kpumuk/thrift-weaver/commit/768276b899b6fa90a066738639736072f0b83bb8))
+* **deps-dev:** bump tsx from 4.23.0 to 4.23.1 in /editors/vscode ([#78](https://github.com/kpumuk/thrift-weaver/issues/78)) ([25aafdc](https://github.com/kpumuk/thrift-weaver/commit/25aafdca216b7a4e068b457260ac34402f6933f9))
+* **deps:** bump actions/attest-build-provenance from 4.1.0 to 4.1.1 ([#69](https://github.com/kpumuk/thrift-weaver/issues/69)) ([2d7a2a2](https://github.com/kpumuk/thrift-weaver/commit/2d7a2a2611e3af04da829f8c6fa67b806015491f))
+* **deps:** bump actions/cache/restore from 5.0.5 to 6.1.0 ([#71](https://github.com/kpumuk/thrift-weaver/issues/71)) ([1cf9670](https://github.com/kpumuk/thrift-weaver/commit/1cf967029ab0dddb63161f774475b866ae3c7f1d))
+* **deps:** bump actions/cache/save from 5.0.5 to 6.1.0 ([#68](https://github.com/kpumuk/thrift-weaver/issues/68)) ([e9327f6](https://github.com/kpumuk/thrift-weaver/commit/e9327f68059de9cf05bfcd7351be0831940018ea))
+* **deps:** bump actions/labeler from 6.1.0 to 6.2.0 ([#73](https://github.com/kpumuk/thrift-weaver/issues/73)) ([52294f1](https://github.com/kpumuk/thrift-weaver/commit/52294f13b4a17188f11f9ac155fe7f19cfcbf0a6))
+* **deps:** bump actions/setup-go from 6.4.0 to 6.5.0 ([#70](https://github.com/kpumuk/thrift-weaver/issues/70)) ([33db562](https://github.com/kpumuk/thrift-weaver/commit/33db56224e0ba388b68680a892aaf57b5ce795ca))
+* **deps:** bump actions/setup-node from 6.4.0 to 7.0.0 ([#74](https://github.com/kpumuk/thrift-weaver/issues/74)) ([8a92f35](https://github.com/kpumuk/thrift-weaver/commit/8a92f355034c2fc811ea03f66357d609d564eba4))
+* **deps:** bump adm-zip from 0.5.18 to 0.6.0 in /editors/vscode ([#75](https://github.com/kpumuk/thrift-weaver/issues/75)) ([c543d70](https://github.com/kpumuk/thrift-weaver/commit/c543d707cfe6d2519d942589c2e5db216b8c2d57))
+* **deps:** bump tar from 7.5.19 to 7.5.20 in /editors/vscode ([#79](https://github.com/kpumuk/thrift-weaver/issues/79)) ([56d3253](https://github.com/kpumuk/thrift-weaver/commit/56d3253cf38442295ab27a37026c93d7c3d9f999))
+
 ## [0.3.3](https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...v0.3.3) (2026-07-05)
 
 
