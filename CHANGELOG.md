@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.4](https://github.com/kpumuk/thrift-weaver/compare/v0.3.3...v0.3.4) (2026-08-25)
+
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 26.1.0 to 26.1.1 in /editors/vscode ([#76](https://github.com/kpumuk/thrift-weaver/issues/76)) ([768276b](https://github.com/kpumuk/thrift-weaver/commit/768276b899b6fa90a066738639736072f0b83bb8))
+* **deps-dev:** bump @types/node from 26.1.1 to 26.1.2 in /editors/vscode ([#91](https://github.com/kpumuk/thrift-weaver/issues/91)) ([1c405cd](https://github.com/kpumuk/thrift-weaver/commit/1c405cdf77941776f1b1b49fd97da881ff95e5b4))
+* **deps-dev:** bump @types/node from 26.1.2 to 26.2.0 in /editors/vscode ([#98](https://github.com/kpumuk/thrift-weaver/issues/98)) ([61f8007](https://github.com/kpumuk/thrift-weaver/commit/61f8007360e0112673c625248beaf075bccb1f36))
+* **deps-dev:** bump esbuild from 0.28.1 to 0.28.2 in /editors/vscode ([#96](https://github.com/kpumuk/thrift-weaver/issues/96)) ([33ee90f](https://github.com/kpumuk/thrift-weaver/commit/33ee90fcd3b2f3773c00e5ae90a8582164f14d37))
+* **deps-dev:** bump fast-uri from 3.1.3 to 3.1.5 in /editors/vscode ([#87](https://github.com/kpumuk/thrift-weaver/issues/87)) ([69721f8](https://github.com/kpumuk/thrift-weaver/commit/69721f894bd3e5d84d9f9dcc4505a1e0ded21637))
+* **deps-dev:** bump js-yaml from 4.3.0 to 4.3.1 in /editors/vscode ([#95](https://github.com/kpumuk/thrift-weaver/issues/95)) ([65cb309](https://github.com/kpumuk/thrift-weaver/commit/65cb309158cda2265a34e7d6581872ad6c174d08))
+* **deps-dev:** bump tsx from 4.23.0 to 4.23.1 in /editors/vscode ([#78](https://github.com/kpumuk/thrift-weaver/issues/78)) ([25aafdc](https://github.com/kpumuk/thrift-weaver/commit/25aafdca216b7a4e068b457260ac34402f6933f9))
+* **deps-dev:** bump tsx from 4.23.1 to 4.23.5 in /editors/vscode ([#92](https://github.com/kpumuk/thrift-weaver/issues/92)) ([6299a04](https://github.com/kpumuk/thrift-weaver/commit/6299a049c772cfdc42fe1b7fc0688eae654a9ede))
+* **deps-dev:** bump tsx from 4.23.5 to 4.23.12 in /editors/vscode ([#99](https://github.com/kpumuk/thrift-weaver/issues/99)) ([52f9028](https://github.com/kpumuk/thrift-weaver/commit/52f90287c21b7ea9ce581fa6bf3d2244a132ebb3))
+* **deps-dev:** bump typescript from 6.0.3 to 7.0.2 in /editors/vscode ([#77](https://github.com/kpumuk/thrift-weaver/issues/77)) ([9ed92d7](https://github.com/kpumuk/thrift-weaver/commit/9ed92d7a4f1a819c6a1faf400c015488f26e1ad5))
+* **deps-dev:** bump undici from 7.28.0 to 7.29.0 in /editors/vscode ([#86](https://github.com/kpumuk/thrift-weaver/issues/86)) ([8ca1121](https://github.com/kpumuk/thrift-weaver/commit/8ca1121b764cfd92aaee625e891b797424df3e15))
+* **deps:** bump actions/attest from 4.1.1 to 4.2.0 ([#83](https://github.com/kpumuk/thrift-weaver/issues/83)) ([0cba331](https://github.com/kpumuk/thrift-weaver/commit/0cba331730d5cdf24e00311ffc9f1e5992ef4819))
+* **deps:** bump actions/attest from 4.2.0 to 4.2.1 ([#94](https://github.com/kpumuk/thrift-weaver/issues/94)) ([a365e35](https://github.com/kpumuk/thrift-weaver/commit/a365e35d82b932c43639667f714006a8a0eeb264))
+* **deps:** bump actions/attest from 4.2.1 to 4.2.2 ([#97](https://github.com/kpumuk/thrift-weaver/issues/97)) ([c476ee9](https://github.com/kpumuk/thrift-weaver/commit/c476ee925e83c3611b64c260cf1dd47f955f1b3e))
+* **deps:** bump actions/attest-build-provenance from 4.1.0 to 4.1.1 ([#69](https://github.com/kpumuk/thrift-weaver/issues/69)) ([2d7a2a2](https://github.com/kpumuk/thrift-weaver/commit/2d7a2a2611e3af04da829f8c6fa67b806015491f))
+* **deps:** bump actions/cache/restore from 5.0.5 to 6.1.0 ([#71](https://github.com/kpumuk/thrift-weaver/issues/71)) ([1cf9670](https://github.com/kpumuk/thrift-weaver/commit/1cf967029ab0dddb63161f774475b866ae3c7f1d))
+* **deps:** bump actions/cache/save from 5.0.5 to 6.1.0 ([#68](https://github.com/kpumuk/thrift-weaver/issues/68)) ([e9327f6](https://github.com/kpumuk/thrift-weaver/commit/e9327f68059de9cf05bfcd7351be0831940018ea))
+* **deps:** bump actions/checkout from 7.0.0 to 7.0.1 ([#84](https://github.com/kpumuk/thrift-weaver/issues/84)) ([89d17d4](https://github.com/kpumuk/thrift-weaver/commit/89d17d4a60e85e30bdb4c919391be1866f31c8d7))
+* **deps:** bump actions/labeler from 6.1.0 to 6.2.0 ([#73](https://github.com/kpumuk/thrift-weaver/issues/73)) ([52294f1](https://github.com/kpumuk/thrift-weaver/commit/52294f13b4a17188f11f9ac155fe7f19cfcbf0a6))
+* **deps:** bump actions/labeler from 6.2.0 to 7.0.0 ([#90](https://github.com/kpumuk/thrift-weaver/issues/90)) ([2193d06](https://github.com/kpumuk/thrift-weaver/commit/2193d06c2ae1da9eb4ff2dcb10aa9f5406490efa))
+* **deps:** bump actions/setup-go from 6.4.0 to 6.5.0 ([#70](https://github.com/kpumuk/thrift-weaver/issues/70)) ([33db562](https://github.com/kpumuk/thrift-weaver/commit/33db56224e0ba388b68680a892aaf57b5ce795ca))
+* **deps:** bump actions/setup-go from 6.5.0 to 7.0.0 ([#82](https://github.com/kpumuk/thrift-weaver/issues/82)) ([930d8ac](https://github.com/kpumuk/thrift-weaver/commit/930d8acd38526e4b5fc8aa52a63e2dc187c2c6cc))
+* **deps:** bump actions/setup-node from 6.4.0 to 7.0.0 ([#74](https://github.com/kpumuk/thrift-weaver/issues/74)) ([8a92f35](https://github.com/kpumuk/thrift-weaver/commit/8a92f355034c2fc811ea03f66357d609d564eba4))
+* **deps:** bump adm-zip from 0.5.18 to 0.6.0 in /editors/vscode ([#75](https://github.com/kpumuk/thrift-weaver/issues/75)) ([c543d70](https://github.com/kpumuk/thrift-weaver/commit/c543d707cfe6d2519d942589c2e5db216b8c2d57))
+* **deps:** bump brace-expansion from 5.0.7 to 5.0.9 in /editors/vscode ([#88](https://github.com/kpumuk/thrift-weaver/issues/88)) ([17d7b48](https://github.com/kpumuk/thrift-weaver/commit/17d7b48e5cb3c1bd468c4e11599355af8f0fb830))
+* **deps:** bump jdx/mise-action from 4.2.0 to 4.2.1 ([#81](https://github.com/kpumuk/thrift-weaver/issues/81)) ([b200df0](https://github.com/kpumuk/thrift-weaver/commit/b200df0625f74439ecd55194fa97d407d7bb3a32))
+* **deps:** bump jdx/mise-action from 4.2.1 to 4.2.4 ([#89](https://github.com/kpumuk/thrift-weaver/issues/89)) ([ceb0f9d](https://github.com/kpumuk/thrift-weaver/commit/ceb0f9dcc9885efac37d3e6ccd47b09c0703804f))
+* **deps:** bump jdx/mise-action from 4.2.4 to 4.2.5 ([#100](https://github.com/kpumuk/thrift-weaver/issues/100)) ([11ff0bd](https://github.com/kpumuk/thrift-weaver/commit/11ff0bdb43734d8bfaae7fb1ae41507e0e8c2d3c))
+* **deps:** bump tar from 7.5.19 to 7.5.20 in /editors/vscode ([#79](https://github.com/kpumuk/thrift-weaver/issues/79)) ([56d3253](https://github.com/kpumuk/thrift-weaver/commit/56d3253cf38442295ab27a37026c93d7c3d9f999))
+* **deps:** bump tar from 7.5.20 to 7.5.22 in /editors/vscode ([#85](https://github.com/kpumuk/thrift-weaver/issues/85)) ([4b97da6](https://github.com/kpumuk/thrift-weaver/commit/4b97da64cead3009c6926733aa7b3f3b1fed7ca8))
+* **deps:** bump zizmorcore/zizmor-action from 0.5.7 to 0.6.0 ([#80](https://github.com/kpumuk/thrift-weaver/issues/80)) ([a4aaa64](https://github.com/kpumuk/thrift-weaver/commit/a4aaa6469b67430013a9c36a3c378a45a43de1fe))
+* **deps:** bump zizmorcore/zizmor-action from 0.6.0 to 0.6.2 ([#93](https://github.com/kpumuk/thrift-weaver/issues/93)) ([769b197](https://github.com/kpumuk/thrift-weaver/commit/769b1975b9346f2afe07287cfea3fffed5d6f5f4))
+
 ## [0.3.3](https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...v0.3.3) (2026-07-05)
 
 
