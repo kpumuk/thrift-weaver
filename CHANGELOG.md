@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.5](https://github.com/kpumuk/thrift-weaver/compare/v0.3.4...v0.3.5) (2026-09-14)
+
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 26.2.0 to 26.4.0 in /editors/vscode ([#103](https://github.com/kpumuk/thrift-weaver/issues/103)) ([f3a9d4f](https://github.com/kpumuk/thrift-weaver/commit/f3a9d4f39bc110a3b6dcbfb78ece6e8591061c0f))
+* **deps-dev:** bump @types/node from 26.4.0 to 26.4.1 in /editors/vscode ([#109](https://github.com/kpumuk/thrift-weaver/issues/109)) ([3c02754](https://github.com/kpumuk/thrift-weaver/commit/3c027544799301c92f944cc69650b11887279a4c))
+* **deps-dev:** bump fast-uri from 3.1.5 to 3.1.7 in /editors/vscode ([#108](https://github.com/kpumuk/thrift-weaver/issues/108)) ([7f7851d](https://github.com/kpumuk/thrift-weaver/commit/7f7851d2c82bf80e496d756eb46952145796de0d))
+* **deps-dev:** bump js-yaml from 4.3.1 to 4.3.2 in /editors/vscode ([#107](https://github.com/kpumuk/thrift-weaver/issues/107)) ([868bdc7](https://github.com/kpumuk/thrift-weaver/commit/868bdc74968fd491b8bcbcc7fb029d538baa9c58))
+* **deps-dev:** bump tsx from 4.23.12 to 4.23.13 in /editors/vscode ([#105](https://github.com/kpumuk/thrift-weaver/issues/105)) ([d4be143](https://github.com/kpumuk/thrift-weaver/commit/d4be14388333e3b7bbfde7e3ad44ec7a489d5a05))
+* **deps:** bump jdx/mise-action from 4.2.5 to 4.3.0 ([#102](https://github.com/kpumuk/thrift-weaver/issues/102)) ([ac2960c](https://github.com/kpumuk/thrift-weaver/commit/ac2960c6bf97f81f0a91f1ab0486d7c189f370a8))
+* **deps:** bump vscode-languageclient from 10.1.0 to 10.1.1 in /editors/vscode ([#104](https://github.com/kpumuk/thrift-weaver/issues/104)) ([dfaac83](https://github.com/kpumuk/thrift-weaver/commit/dfaac835299ae38ccfcfcf56e58845a5dffcdbc9))
+* **deps:** bump zizmorcore/zizmor-action from 0.6.2 to 0.6.3 ([#101](https://github.com/kpumuk/thrift-weaver/issues/101)) ([65b7137](https://github.com/kpumuk/thrift-weaver/commit/65b7137230dfa84a26aeaa9c9d576f3a9597a979))
+
 ## [0.3.4](https://github.com/kpumuk/thrift-weaver/compare/v0.3.3...v0.3.4) (2026-08-25)
 
 
