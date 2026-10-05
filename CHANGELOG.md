@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.5](https://github.com/kpumuk/thrift-weaver/compare/v0.3.4...v0.3.5) (2026-10-05)
+
+
+### Bug Fixes
+
+* **ci:** exempt release metadata from VS Code changelog checks ([#120](https://github.com/kpumuk/thrift-weaver/issues/120)) ([0fff677](https://github.com/kpumuk/thrift-weaver/commit/0fff6779400e9a045264a8ed1c72c7c5b572e637))
+
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 26.2.0 to 26.4.0 in /editors/vscode ([#103](https://github.com/kpumuk/thrift-weaver/issues/103)) ([f3a9d4f](https://github.com/kpumuk/thrift-weaver/commit/f3a9d4f39bc110a3b6dcbfb78ece6e8591061c0f))
+* **deps-dev:** bump @types/node from 26.4.0 to 26.4.1 in /editors/vscode ([#109](https://github.com/kpumuk/thrift-weaver/issues/109)) ([3c02754](https://github.com/kpumuk/thrift-weaver/commit/3c027544799301c92f944cc69650b11887279a4c))
+* **deps-dev:** bump @types/node from 26.4.1 to 26.6.3 in /editors/vscode ([#118](https://github.com/kpumuk/thrift-weaver/issues/118)) ([84de854](https://github.com/kpumuk/thrift-weaver/commit/84de8549df831e504240bb5a289a232bb787353f))
+* **deps-dev:** bump @vscode/vsce from 3.9.2 to 4.0.0 in /editors/vscode ([#115](https://github.com/kpumuk/thrift-weaver/issues/115)) ([cef3176](https://github.com/kpumuk/thrift-weaver/commit/cef317636352f15b342608c2c95d7c548c8ca662))
+* **deps-dev:** bump fast-uri from 3.1.5 to 3.1.7 in /editors/vscode ([#108](https://github.com/kpumuk/thrift-weaver/issues/108)) ([7f7851d](https://github.com/kpumuk/thrift-weaver/commit/7f7851d2c82bf80e496d756eb46952145796de0d))
+* **deps-dev:** bump js-yaml from 4.3.1 to 4.3.2 in /editors/vscode ([#107](https://github.com/kpumuk/thrift-weaver/issues/107)) ([868bdc7](https://github.com/kpumuk/thrift-weaver/commit/868bdc74968fd491b8bcbcc7fb029d538baa9c58))
+* **deps-dev:** bump tsx from 4.23.12 to 4.23.13 in /editors/vscode ([#105](https://github.com/kpumuk/thrift-weaver/issues/105)) ([d4be143](https://github.com/kpumuk/thrift-weaver/commit/d4be14388333e3b7bbfde7e3ad44ec7a489d5a05))
+* **deps-dev:** bump tsx from 4.23.13 to 4.23.15 in /editors/vscode ([#114](https://github.com/kpumuk/thrift-weaver/issues/114)) ([fe320fd](https://github.com/kpumuk/thrift-weaver/commit/fe320fdc6b7164da0bc8551cbad79b0feb9a9563))
+* **deps:** bump adm-zip from 0.6.0 to 0.6.1 in /editors/vscode ([#111](https://github.com/kpumuk/thrift-weaver/issues/111)) ([caa63fc](https://github.com/kpumuk/thrift-weaver/commit/caa63fc364d576e7624ff3cfd894ad32b90349b8))
+* **deps:** bump brace-expansion from 5.0.9 to 5.0.12 in /editors/vscode ([#119](https://github.com/kpumuk/thrift-weaver/issues/119)) ([441f417](https://github.com/kpumuk/thrift-weaver/commit/441f4177a520b9a9f4e89487f2c791186cdb6dcf))
+* **deps:** bump jdx/mise-action from 4.2.5 to 4.3.0 ([#102](https://github.com/kpumuk/thrift-weaver/issues/102)) ([ac2960c](https://github.com/kpumuk/thrift-weaver/commit/ac2960c6bf97f81f0a91f1ab0486d7c189f370a8))
+* **deps:** bump jdx/mise-action from 4.3.0 to 5.0.0 ([#116](https://github.com/kpumuk/thrift-weaver/issues/116)) ([819d4d1](https://github.com/kpumuk/thrift-weaver/commit/819d4d184cf33cad667b95f9b0eff579b0a1b548))
+* **deps:** bump vscode-languageclient from 10.1.0 to 10.1.1 in /editors/vscode ([#104](https://github.com/kpumuk/thrift-weaver/issues/104)) ([dfaac83](https://github.com/kpumuk/thrift-weaver/commit/dfaac835299ae38ccfcfcf56e58845a5dffcdbc9))
+* **deps:** bump vscode-languageclient from 10.1.1 to 10.1.2 in /editors/vscode ([#117](https://github.com/kpumuk/thrift-weaver/issues/117)) ([42ad96e](https://github.com/kpumuk/thrift-weaver/commit/42ad96ea583df9eaf87141784e917060eb8aa510))
+* **deps:** bump zizmorcore/zizmor-action from 0.6.2 to 0.6.3 ([#101](https://github.com/kpumuk/thrift-weaver/issues/101)) ([65b7137](https://github.com/kpumuk/thrift-weaver/commit/65b7137230dfa84a26aeaa9c9d576f3a9597a979))
+* **deps:** bump zizmorcore/zizmor-action from 0.6.3 to 0.6.4 ([#110](https://github.com/kpumuk/thrift-weaver/issues/110)) ([cf2b45a](https://github.com/kpumuk/thrift-weaver/commit/cf2b45a8465154069462b6c881b4257540a5fab0))
+
 ## [0.3.4](https://github.com/kpumuk/thrift-weaver/compare/v0.3.3...v0.3.4) (2026-08-25)
 
 
