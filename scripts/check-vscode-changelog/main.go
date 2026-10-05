@@ -97,14 +97,14 @@ func changelogRequired(cfg config, files []string) (bool, []string, error) {
 	if hasChangelog {
 		return false, nil, nil
 	}
-	filtered, err := filterDependencyOnlyPackageJSONReason(cfg, reasons)
+	filtered, err := filterPackageJSONReason(cfg, reasons)
 	if err != nil {
 		return false, nil, err
 	}
 	return len(filtered) > 0, filtered, nil
 }
 
-func filterDependencyOnlyPackageJSONReason(cfg config, reasons []string) ([]string, error) {
+func filterPackageJSONReason(cfg config, reasons []string) ([]string, error) {
 	if !contains(reasons, "editors/vscode/package.json") {
 		return reasons, nil
 	}
@@ -177,22 +177,24 @@ func gitShow(ref, path string) ([]byte, error) {
 }
 
 func manifestChangeRequiresChangelog(before, after []byte) (bool, error) {
-	beforeManifest, err := manifestWithoutDependencies(before)
+	beforeManifest, err := manifestUserVisibleFields(before)
 	if err != nil {
 		return false, err
 	}
-	afterManifest, err := manifestWithoutDependencies(after)
+	afterManifest, err := manifestUserVisibleFields(after)
 	if err != nil {
 		return false, err
 	}
 	return !reflect.DeepEqual(beforeManifest, afterManifest), nil
 }
 
-func manifestWithoutDependencies(src []byte) (map[string]any, error) {
+func manifestUserVisibleFields(src []byte) (map[string]any, error) {
 	var manifest map[string]any
 	if err := json.Unmarshal(src, &manifest); err != nil {
 		return nil, fmt.Errorf("parse package.json: %w", err)
 	}
+	// Release version and dependency changes do not require user-facing notes.
+	delete(manifest, "version")
 	delete(manifest, "dependencies")
 	delete(manifest, "devDependencies")
 	return manifest, nil

@@ -68,3 +68,59 @@ func TestManifestChangeDoesNotRequireChangelogForDependencyOnlyChange(t *testing
 		t.Fatal("expected dependency-only change to skip changelog requirement")
 	}
 }
+
+func TestManifestChangeDoesNotRequireChangelogForReleaseMetadataChange(t *testing.T) {
+	before := []byte(`{"name":"x","version":"0.3.4","devDependencies":{"tsx":"^4.23.15"}}`)
+	for _, tc := range []struct {
+		name  string
+		after string
+	}{
+		{
+			name:  "version only",
+			after: `{"name":"x","version":"0.3.5","devDependencies":{"tsx":"^4.23.15"}}`,
+		},
+		{
+			name:  "version and dependency",
+			after: `{"name":"x","version":"0.3.5","devDependencies":{"tsx":"^4.23.13"}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			required, err := manifestChangeRequiresChangelog(before, []byte(tc.after))
+			if err != nil {
+				t.Fatalf("manifestChangeRequiresChangelog error: %v", err)
+			}
+			if required {
+				t.Fatal("expected release metadata change to skip changelog requirement")
+			}
+		})
+	}
+}
+
+func TestManifestChangeRequiresChangelogForUserVisibleChangeWithVersionBump(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		before string
+		after  string
+	}{
+		{
+			name:   "engine",
+			before: `{"version":"0.3.4","engines":{"vscode":"^1.90.0"}}`,
+			after:  `{"version":"0.3.5","engines":{"vscode":"^1.91.0"}}`,
+		},
+		{
+			name:   "command",
+			before: `{"version":"0.3.4","contributes":{"commands":[{"command":"thrift.restart","title":"Restart"}]}}`,
+			after:  `{"version":"0.3.5","contributes":{"commands":[{"command":"thrift.restart","title":"Restart Server"}]}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			required, err := manifestChangeRequiresChangelog([]byte(tc.before), []byte(tc.after))
+			if err != nil {
+				t.Fatalf("manifestChangeRequiresChangelog error: %v", err)
+			}
+			if !required {
+				t.Fatal("expected user-visible change to require a changelog despite version bump")
+			}
+		})
+	}
+}
