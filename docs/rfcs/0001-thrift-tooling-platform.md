@@ -1085,6 +1085,7 @@ Recommended additions (required before beta):
 - Release versions are proposed by a bot-managed release PR derived from merged Conventional Commit-style PR titles
 - The release PR is the source of truth for version bumps; merging it creates the `vX.Y.Z` tag that starts the publish workflow
 - VS Code extension user-facing notes are maintained in `editors/vscode/CHANGELOG.md` under `Unreleased` and rolled into the released version during release preparation
+- The VS Code changelog policy does not require user-facing notes for `package.json` changes limited to `version`, `dependencies`, and `devDependencies`; other user-visible manifest or implementation changes still require a changelog update
 
 ## Milestones and Acceptance Criteria
 
