@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- Updated the VS Code packaging and publishing toolchain to address CVE-2026-109461 in MSAL Node.
+
 
 ## [v0.3.5] - 2026-10-05
 
