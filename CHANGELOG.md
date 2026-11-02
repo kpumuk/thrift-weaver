@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.6](https://github.com/kpumuk/thrift-weaver/compare/v0.3.5...v0.3.6) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** patch MSAL and Go security vulnerabilities ([f52968a](https://github.com/kpumuk/thrift-weaver/commit/f52968a2e9371b2b44a388651d0d10951a144ff2))
+
+
+### Dependencies
+
+* **deps-dev:** bump @types/adm-zip from 0.5.8 to 0.6.0 in /editors/vscode ([#128](https://github.com/kpumuk/thrift-weaver/issues/128)) ([15579a5](https://github.com/kpumuk/thrift-weaver/commit/15579a5364541789463542cb8ede4d87850d2420))
+* **deps-dev:** bump @types/node from 26.6.3 to 26.6.5 in /editors/vscode ([#123](https://github.com/kpumuk/thrift-weaver/issues/123)) ([38e2420](https://github.com/kpumuk/thrift-weaver/commit/38e2420b6dd13a8d9d6faf6a99e035dd15a35750))
+* **deps:** bump actions/download-artifact from 8.0.1 to 8.0.2 ([#127](https://github.com/kpumuk/thrift-weaver/issues/127)) ([ae72be8](https://github.com/kpumuk/thrift-weaver/commit/ae72be8375b8f2378cc9586286e8fe026d647d70))
+* **deps:** bump actions/setup-node from 7.0.0 to 7.1.0 ([#125](https://github.com/kpumuk/thrift-weaver/issues/125)) ([ed05a00](https://github.com/kpumuk/thrift-weaver/commit/ed05a0061955323377b3a4aac2d30c82c3e60076))
+* **deps:** bump actions/upload-artifact from 7.0.1 to 7.0.2 ([#126](https://github.com/kpumuk/thrift-weaver/issues/126)) ([aaf6b91](https://github.com/kpumuk/thrift-weaver/commit/aaf6b9199c3603f40f1fb4dcc9aecd81e0111506))
+* **deps:** bump jdx/mise-action from 5.0.0 to 5.1.2 ([#124](https://github.com/kpumuk/thrift-weaver/issues/124)) ([689369e](https://github.com/kpumuk/thrift-weaver/commit/689369edf681e078bdfcdc5cde69d6d05309e6db))
+* **deps:** bump jdx/mise-action from 5.1.2 to 5.2.1 ([#131](https://github.com/kpumuk/thrift-weaver/issues/131)) ([4e83d9d](https://github.com/kpumuk/thrift-weaver/commit/4e83d9da3e3f542790e3afd0756fbbfcd4d31319))
+* **deps:** bump jdx/mise-action from 5.2.1 to 5.2.3 ([#133](https://github.com/kpumuk/thrift-weaver/issues/133)) ([a67df61](https://github.com/kpumuk/thrift-weaver/commit/a67df611b71f5083e03101b1be7242fc1773b5af))
+* **deps:** bump vscode-languageclient from 10.1.2 to 11.0.0 in /editors/vscode ([#134](https://github.com/kpumuk/thrift-weaver/issues/134)) ([efebebf](https://github.com/kpumuk/thrift-weaver/commit/efebebf6df90a86b57f8262b6e55157710f658c4))
+* **deps:** bump zizmorcore/zizmor-action from 0.6.4 to 0.7.1 ([#130](https://github.com/kpumuk/thrift-weaver/issues/130)) ([2955258](https://github.com/kpumuk/thrift-weaver/commit/2955258ab7079882d688b36951cad24608cc06dc))
+* **deps:** bump zizmorcore/zizmor-action from 0.7.1 to 0.8.0 ([#135](https://github.com/kpumuk/thrift-weaver/issues/135)) ([0ef2c45](https://github.com/kpumuk/thrift-weaver/commit/0ef2c45cf6afa4317191262dcb3a2fbe998e32a0))
+
 ## [0.3.5](https://github.com/kpumuk/thrift-weaver/compare/v0.3.4...v0.3.5) (2026-10-05)
 
 
