@@ -967,11 +967,9 @@ func TestServerNavigationQueriesUseLoadedGraphBeforeDiscoveryCompletes(t *testin
 	}
 
 	if _, err := s.References(context.Background(), ReferenceParams{
-		TextDocumentPositionParams: TextDocumentPositionParams{
-			TextDocument: TextDocumentIdentifier{URI: mainURI},
-			Position:     userPos,
-		},
-		Context: ReferenceContext{IncludeDeclaration: true},
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     userPos,
+		Context:      ReferenceContext{IncludeDeclaration: true},
 	}); !errors.Is(err, index.ErrWorkspaceIncomplete) {
 		t.Fatalf("References error=%v, want %v", err, index.ErrWorkspaceIncomplete)
 	}
@@ -1083,11 +1081,9 @@ func TestServerReferencesSucceedAfterWorkspaceDiscoveryCompletes(t *testing.T) {
 	userPos := mustLSPPositionForSubstring(t, mainText, "types.User input")
 
 	if _, err := s.References(context.Background(), ReferenceParams{
-		TextDocumentPositionParams: TextDocumentPositionParams{
-			TextDocument: TextDocumentIdentifier{URI: mainURI},
-			Position:     userPos,
-		},
-		Context: ReferenceContext{IncludeDeclaration: true},
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     userPos,
+		Context:      ReferenceContext{IncludeDeclaration: true},
 	}); !errors.Is(err, index.ErrWorkspaceIncomplete) {
 		t.Fatalf("References before rescan error=%v, want %v", err, index.ErrWorkspaceIncomplete)
 	}
@@ -1097,11 +1093,9 @@ func TestServerReferencesSucceedAfterWorkspaceDiscoveryCompletes(t *testing.T) {
 	}
 
 	references, err := s.References(context.Background(), ReferenceParams{
-		TextDocumentPositionParams: TextDocumentPositionParams{
-			TextDocument: TextDocumentIdentifier{URI: mainURI},
-			Position:     userPos,
-		},
-		Context: ReferenceContext{IncludeDeclaration: true},
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     userPos,
+		Context:      ReferenceContext{IncludeDeclaration: true},
 	})
 	if err != nil {
 		t.Fatalf("References after rescan: %v", err)
@@ -1124,11 +1118,9 @@ func TestServerDispatchReferencesReturnRequestFailedWhenDiscoveryIsIncomplete(t 
 		ID:      json.RawMessage(`34`),
 		Method:  "textDocument/references",
 		Params: mustJSON(t, ReferenceParams{
-			TextDocumentPositionParams: TextDocumentPositionParams{
-				TextDocument: TextDocumentIdentifier{URI: mainURI},
-				Position:     mustLSPPositionForSubstring(t, mainText, "types.User input"),
-			},
-			Context: ReferenceContext{IncludeDeclaration: true},
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     mustLSPPositionForSubstring(t, mainText, "types.User input"),
+			Context:      ReferenceContext{IncludeDeclaration: true},
 		}),
 	}
 	if err := s.dispatch(context.Background(), req); err != nil {
@@ -1184,11 +1176,9 @@ func TestServerRunNavigationQueriesReturnEmptyForUnresolvedBinding(t *testing.T)
 		ID:      json.RawMessage(`42`),
 		Method:  "textDocument/references",
 		Params: mustJSON(t, ReferenceParams{
-			TextDocumentPositionParams: TextDocumentPositionParams{
-				TextDocument: TextDocumentIdentifier{URI: mainURI},
-				Position:     refPos,
-			},
-			Context: ReferenceContext{IncludeDeclaration: true},
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     refPos,
+			Context:      ReferenceContext{IncludeDeclaration: true},
 		}),
 	})
 
@@ -1431,11 +1421,9 @@ func TestServerRunPrepareRenameAndRename(t *testing.T) {
 	}
 
 	edit, err := s.Rename(context.Background(), RenameParams{
-		TextDocumentPositionParams: TextDocumentPositionParams{
-			TextDocument: TextDocumentIdentifier{URI: mainURI},
-			Position:     renamePos,
-		},
-		NewName: "Person",
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Position:     renamePos,
+		NewName:      "Person",
 	})
 	if err != nil {
 		t.Fatalf("Rename: %v", err)
@@ -1482,11 +1470,9 @@ func TestServerRenameReturnsWorkspaceIncompleteBeforeDiscoveryCompletes(t *testi
 		ID:      json.RawMessage(`83`),
 		Method:  "textDocument/rename",
 		Params: mustJSON(t, RenameParams{
-			TextDocumentPositionParams: TextDocumentPositionParams{
-				TextDocument: TextDocumentIdentifier{URI: mainURI},
-				Position:     mustLSPPositionForSubstring(t, mainText, "shared.User user"),
-			},
-			NewName: "Person",
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     mustLSPPositionForSubstring(t, mainText, "shared.User user"),
+			NewName:      "Person",
 		}),
 	}
 	if err := s.dispatch(context.Background(), req); err != nil {
@@ -1623,11 +1609,9 @@ func TestServerRunRenameBlockedForInvalidName(t *testing.T) {
 		ID:      json.RawMessage(`101`),
 		Method:  "textDocument/rename",
 		Params: mustJSON(t, RenameParams{
-			TextDocumentPositionParams: TextDocumentPositionParams{
-				TextDocument: TextDocumentIdentifier{URI: mainURI},
-				Position:     mustLSPPositionForSubstring(t, mainText, "shared.User user"),
-			},
-			NewName: "struct",
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     mustLSPPositionForSubstring(t, mainText, "shared.User user"),
+			NewName:      "struct",
 		}),
 	}
 	if err := s.dispatch(context.Background(), req); err != nil {
@@ -1666,11 +1650,9 @@ func TestServerRunRenameAbortsOnClosedFileDrift(t *testing.T) {
 		ID:      json.RawMessage(`110`),
 		Method:  "textDocument/rename",
 		Params: mustJSON(t, RenameParams{
-			TextDocumentPositionParams: TextDocumentPositionParams{
-				TextDocument: TextDocumentIdentifier{URI: mainURI},
-				Position:     renamePos,
-			},
-			NewName: "Person",
+			TextDocument: TextDocumentIdentifier{URI: mainURI},
+			Position:     renamePos,
+			NewName:      "Person",
 		}),
 	}
 	if err := s.dispatch(context.Background(), req); err != nil {

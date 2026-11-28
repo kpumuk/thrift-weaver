@@ -455,7 +455,8 @@ func parenListTokenBounds(tree *syntax.Tree, list *syntax.Node) (uint32, uint32,
 	open := -1
 	closeTok := -1
 	for i := list.FirstToken; i <= list.LastToken && int(i) < len(tree.Tokens); i++ {
-		//exhaustive:ignore We intentionally care only about the paren delimiters here.
+		// We intentionally care only about the paren delimiters here.
+		//exhaustive:ignore
 		switch tree.Tokens[i].Kind {
 		case lexer.TokenLParen:
 			if open == -1 {

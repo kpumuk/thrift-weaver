@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 
 	"github.com/kpumuk/thrift-weaver/internal/lexer"
@@ -491,8 +492,8 @@ func selectionRangeForOffset(tree *syntax.Tree, li *itext.LineIndex, off itext.B
 
 	// ids are inner -> outer. Build linked result from outer -> inner.
 	var parent *SelectionRange
-	for i := len(ids) - 1; i >= 0; i-- {
-		n := tree.NodeByID(ids[i])
+	for _, id := range slices.Backward(ids) {
+		n := tree.NodeByID(id)
 		if n == nil {
 			continue
 		}

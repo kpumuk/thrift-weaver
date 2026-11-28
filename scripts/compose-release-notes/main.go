@@ -104,6 +104,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	//nolint:gosec // The output path is the script's own command-line flag.
 	return os.WriteFile(cfg.Output, []byte(out), 0o600)
 }
 
@@ -229,7 +230,6 @@ func (g githubClient) fetchReleasePRBody(ctx context.Context, repo, commit strin
 	}
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	//nolint:gosec // The GitHub API base URL is validated before the client is created.
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return "", err
