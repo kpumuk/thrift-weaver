@@ -22,6 +22,7 @@ export type ManagedInstallConfig = {
 export type ManagedInstallDeps = {
   fetchBytes?: (url: string) => Promise<Uint8Array>;
   log?: (message: string) => void;
+  warn?: (message: string) => void;
 };
 
 type RawManifest = {
@@ -57,6 +58,16 @@ export type ManifestPlatformItem = {
 };
 
 const managedRootDir = 'managed-thriftls';
+const installMetadataFile = 'install.json';
+
+// Recorded next to the current binary so a restart can tell whether the
+// manifest still points at the archive that produced it.
+type InstallMetadata = {
+  version: string;
+  os: string;
+  arch: string;
+  sha256: string;
+};
 
 export function parseManifestJSON(jsonText: string): Manifest {
   let parsed: unknown;
@@ -172,6 +183,7 @@ export async function installManagedThriftls(
   deps: ManagedInstallDeps = {},
 ): Promise<string> {
   const log = deps.log ?? (() => undefined);
+  const warn = deps.warn ?? log;
   const allowInsecureHTTP = config.allowInsecureHTTP === true;
   const fetchBytes = deps.fetchBytes ?? ((url: string) => fetchBytesDefault(url, allowInsecureHTTP));
 
@@ -180,12 +192,49 @@ export async function installManagedThriftls(
   }
 
   const platform = config.platform ?? currentPlatform();
-  const manifestRaw = await fetchBytes(config.manifestURL);
-  const manifest = parseManifestJSON(bytesToUTF8(manifestRaw));
-  const artifact = selectPlatformArtifact(manifest, platform);
+  const managedRoot = path.join(config.storageDir, managedRootDir);
+  const binaryName = platform.os === 'windows' ? 'thriftls.exe' : 'thriftls';
+  const currentDir = path.join(managedRoot, 'current');
+  const currentBinary = path.join(currentDir, binaryName);
 
-  log(`managed-install: selected ${artifact.filename} for ${platform.os}/${platform.arch}`);
+  try {
+    const manifestRaw = await fetchBytes(config.manifestURL);
+    const manifest = parseManifestJSON(bytesToUTF8(manifestRaw));
+    const artifact = selectPlatformArtifact(manifest, platform);
+    const wanted: InstallMetadata = {
+      version: manifest.version,
+      os: platform.os,
+      arch: platform.arch,
+      sha256: artifact.sha256,
+    };
 
+    if ((await pathExists(currentBinary)) && sameInstall(await readInstallMetadata(currentDir), wanted)) {
+      log(`managed-install: thriftls ${manifest.version} is already installed`);
+      return currentBinary;
+    }
+
+    log(`managed-install: selected ${artifact.filename} for ${platform.os}/${platform.arch}`);
+    await downloadAndInstall(fetchBytes, artifact, wanted, managedRoot, binaryName, config.failAfterBackupForTest === true);
+    return currentBinary;
+  } catch (err) {
+    // A failed check or update must not take away a working server: fall back
+    // to the last-known-good binary when there is one.
+    if (!(await pathExists(currentBinary))) {
+      throw err;
+    }
+    warn(`managed-install: update failed (${err instanceof Error ? err.message : String(err)}); using installed ${currentBinary}`);
+    return currentBinary;
+  }
+}
+
+async function downloadAndInstall(
+  fetchBytes: (url: string) => Promise<Uint8Array>,
+  artifact: ManifestPlatformItem,
+  metadata: InstallMetadata,
+  managedRoot: string,
+  binaryName: string,
+  failAfterBackupForTest: boolean,
+): Promise<void> {
   const archiveBytes = await fetchBytes(artifact.url);
   if (archiveBytes.byteLength !== artifact.sizeBytes) {
     throw new Error(
@@ -204,9 +253,6 @@ export async function installManagedThriftls(
   await fs.mkdir(extractDir, { recursive: true });
   await fs.writeFile(archivePath, archiveBytes);
 
-  const managedRoot = path.join(config.storageDir, managedRootDir);
-  const binaryName = platform.os === 'windows' ? 'thriftls.exe' : 'thriftls';
-
   try {
     await extractArchiveSafe(archivePath, extractDir);
     const extractedBinary = await findBinary(extractDir, binaryName);
@@ -214,24 +260,16 @@ export async function installManagedThriftls(
       throw new Error(`managed install archive does not contain ${binaryName}`);
     }
 
-    const versionDirName = `${manifest.version}-${platform.os}-${platform.arch}`;
-    const versionDir = path.join(managedRoot, 'versions', versionDirName);
-    await fs.mkdir(versionDir, { recursive: true });
-    const versionedBinary = path.join(versionDir, binaryName);
-    await fs.copyFile(extractedBinary, versionedBinary);
-    if (platform.os !== 'windows') {
-      await fs.chmod(versionedBinary, 0o755);
-    }
-
     const currentDir = path.join(managedRoot, 'current');
     const backupDir = path.join(managedRoot, 'backup');
     const stagingCurrentDir = path.join(managedRoot, `staging-${Date.now()}`);
     await fs.mkdir(stagingCurrentDir, { recursive: true });
     const stagingBinary = path.join(stagingCurrentDir, binaryName);
-    await fs.copyFile(versionedBinary, stagingBinary);
-    if (platform.os !== 'windows') {
+    await fs.copyFile(extractedBinary, stagingBinary);
+    if (metadata.os !== 'windows') {
       await fs.chmod(stagingBinary, 0o755);
     }
+    await fs.writeFile(path.join(stagingCurrentDir, installMetadataFile), `${JSON.stringify(metadata)}\n`);
 
     await removeDirIfExists(backupDir);
     if (await pathExists(currentDir)) {
@@ -239,7 +277,7 @@ export async function installManagedThriftls(
     }
 
     try {
-      if (config.failAfterBackupForTest) {
+      if (failAfterBackupForTest) {
         throw new Error('managed install simulated failure after backup');
       }
       await fs.rename(stagingCurrentDir, currentDir);
@@ -252,14 +290,31 @@ export async function installManagedThriftls(
       throw err;
     }
 
-    const currentBinary = path.join(currentDir, binaryName);
-    if (!(await pathExists(currentBinary))) {
+    if (!(await pathExists(path.join(currentDir, binaryName)))) {
       throw new Error('managed install completed without current binary');
     }
-    return currentBinary;
+    // Older releases kept a never-read copy of every installed version here.
+    await removeDirIfExists(path.join(managedRoot, 'versions'));
   } finally {
     await removeDirIfExists(tempRoot);
   }
+}
+
+async function readInstallMetadata(dir: string): Promise<Partial<InstallMetadata> | null | undefined> {
+  try {
+    return JSON.parse(await fs.readFile(path.join(dir, installMetadataFile), 'utf8')) as Partial<InstallMetadata> | null;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameInstall(installed: Partial<InstallMetadata> | null | undefined, wanted: InstallMetadata): boolean {
+  return (
+    installed?.version === wanted.version &&
+    installed.os === wanted.os &&
+    installed.arch === wanted.arch &&
+    installed.sha256 === wanted.sha256
+  );
 }
 
 async function fetchBytesDefault(urlString: string, allowInsecureHTTP: boolean): Promise<Uint8Array> {

@@ -110,6 +110,7 @@ async function startLanguageClient(context: vscode.ExtensionContext, reason: str
           },
           {
             log: (message) => logInfo(message),
+            warn: (message) => logWarn(message),
           },
         ),
     },
@@ -308,6 +309,10 @@ function formatError(err: unknown): string {
 
 function logInfo(message: string): void {
   outputChannel?.appendLine(`[info] ${message}`);
+}
+
+function logWarn(message: string): void {
+  outputChannel?.appendLine(`[warn] ${message}`);
 }
 
 function logError(message: string): void {
