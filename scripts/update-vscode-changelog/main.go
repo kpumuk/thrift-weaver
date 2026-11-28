@@ -45,6 +45,7 @@ func run() error {
 	if bytes.Equal(src, []byte(out)) {
 		return nil
 	}
+	//nolint:gosec // The output path is the script's own command-line flag.
 	return os.WriteFile(cfg.Path, []byte(out), 0o600)
 }
 

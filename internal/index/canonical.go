@@ -87,7 +87,6 @@ func normalizeRuntimePath(inputPath string) (string, error) {
 		return "", err
 	}
 	abs = filepath.Clean(abs)
-	//nolint:gosec // Canonicalization intentionally probes arbitrary candidate paths to resolve existing symlinks.
 	if info, statErr := os.Stat(abs); statErr == nil && info != nil {
 		resolved, evalErr := filepath.EvalSymlinks(abs)
 		if evalErr == nil {

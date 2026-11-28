@@ -119,7 +119,8 @@ func lspSemanticTokensFromSyntax(tree *syntax.Tree) (SemanticTokens, error) {
 }
 
 func isCommentTrivia(kind lexer.TriviaKind) bool {
-	//exhaustive:ignore Trivia whitespace/newline are non-comment cases.
+	// Trivia whitespace/newline are non-comment cases.
+	//exhaustive:ignore
 	switch kind {
 	case lexer.TriviaHashComment, lexer.TriviaLineComment, lexer.TriviaBlockComment, lexer.TriviaDocComment:
 		return true
@@ -130,7 +131,8 @@ func isCommentTrivia(kind lexer.TriviaKind) bool {
 
 func semanticTokenKindForToken(tokens []lexer.Token, i int) string {
 	tok := tokens[i]
-	//exhaustive:ignore Only token kinds mapped to semantic tokens are handled.
+	// Only token kinds mapped to semantic tokens are handled.
+	//exhaustive:ignore
 	switch tok.Kind {
 	case lexer.TokenStringLiteral:
 		return "string"
@@ -156,7 +158,8 @@ func isKeywordToken(kind lexer.TokenKind) bool {
 }
 
 func isBuiltinTypeToken(kind lexer.TokenKind) bool {
-	//exhaustive:ignore Only builtin type token kinds are handled.
+	// Only builtin type token kinds are handled.
+	//exhaustive:ignore
 	switch kind {
 	case lexer.TokenKwVoid, lexer.TokenKwBool, lexer.TokenKwByte, lexer.TokenKwi8, lexer.TokenKwi16,
 		lexer.TokenKwi32, lexer.TokenKwi64, lexer.TokenKwDouble, lexer.TokenKwString,

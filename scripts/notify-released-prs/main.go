@@ -118,7 +118,6 @@ func (g githubClient) releasePRs(ctx context.Context, repo, from, to string) ([]
 	}
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	//nolint:gosec // The GitHub API base URL is validated before the client is created.
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -156,7 +155,6 @@ func (g githubClient) associatedPRs(ctx context.Context, repo, sha string) []pul
 	}
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	//nolint:gosec // The GitHub API base URL is validated before the client is created.
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return nil
@@ -191,7 +189,6 @@ func (g githubClient) commentOnPR(ctx context.Context, repo string, number int, 
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
-	//nolint:gosec // The GitHub API base URL is validated before the client is created.
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return err
@@ -211,7 +208,6 @@ func (g githubClient) hasComment(ctx context.Context, repo string, number int, m
 	}
 	req.Header.Set("Authorization", "Bearer "+g.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	//nolint:gosec // The GitHub API base URL is validated before the client is created.
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return false, err

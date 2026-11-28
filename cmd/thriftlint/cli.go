@@ -162,7 +162,6 @@ func readInput(stdin io.Reader, opts cliOptions) ([]byte, string, error) {
 		}
 		return src, uri, nil
 	}
-	//nolint:gosec // CLI intentionally reads user-provided file paths.
 	src, err := os.ReadFile(opts.path)
 	if err != nil {
 		return nil, "", fmt.Errorf("read %s: %w", opts.path, err)
@@ -377,6 +376,5 @@ func writeJSONDiagnostics(w io.Writer, tree *syntax.Tree, diags []syntax.Diagnos
 }
 
 func writef(w io.Writer, format string, args ...any) {
-	//nolint:gosec // Terminal/debug output helper; format strings are internal callsite constants.
 	_, _ = io.WriteString(w, fmt.Sprintf(format, args...))
 }

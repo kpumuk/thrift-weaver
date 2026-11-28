@@ -3,6 +3,7 @@ package format
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -183,8 +184,8 @@ func writeLineBreak(out *bytes.Buffer, newline, indent string, indentLevel int) 
 }
 
 func pushConcat(stack *[]renderFrame, indent int, mode renderMode, list []Doc) {
-	for i := len(list) - 1; i >= 0; i-- {
-		*stack = append(*stack, renderFrame{indent: indent, mode: mode, doc: list[i]})
+	for _, item := range slices.Backward(list) {
+		*stack = append(*stack, renderFrame{indent: indent, mode: mode, doc: item})
 	}
 }
 

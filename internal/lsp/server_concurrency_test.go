@@ -71,22 +71,18 @@ func TestServerConcurrentWorkspaceOperations(t *testing.T) {
 				Position:     renamePos,
 			})
 			_, _ = s.References(context.Background(), ReferenceParams{
-				TextDocumentPositionParams: TextDocumentPositionParams{
-					TextDocument: TextDocumentIdentifier{URI: mainURI},
-					Position:     renamePos,
-				},
-				Context: ReferenceContext{IncludeDeclaration: true},
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     renamePos,
+				Context:      ReferenceContext{IncludeDeclaration: true},
 			})
 			_, _ = s.PrepareRename(context.Background(), PrepareRenameParams{
 				TextDocument: TextDocumentIdentifier{URI: mainURI},
 				Position:     renamePos,
 			})
 			_, _ = s.Rename(context.Background(), RenameParams{
-				TextDocumentPositionParams: TextDocumentPositionParams{
-					TextDocument: TextDocumentIdentifier{URI: mainURI},
-					Position:     renamePos,
-				},
-				NewName: "Person",
+				TextDocument: TextDocumentIdentifier{URI: mainURI},
+				Position:     renamePos,
+				NewName:      "Person",
 			})
 		}
 	}()
