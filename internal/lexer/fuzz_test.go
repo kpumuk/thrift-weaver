@@ -62,6 +62,7 @@ func addCommonSeeds(f *testing.F) {
 		[]byte("const string X = 'unterminated\n"), // malformed string
 		[]byte("/* unterminated block comment"),    // malformed block comment
 		{0xff, 0xfe, 0xfd},                         // invalid UTF-8 bytes
+		[]byte("\xEF\xBB\xBFstruct S {}\n"),        // UTF-8 BOM at file start
 		[]byte("const uuid X = '{00112233-4455-6677-8899-aabbccddeeff}'\n"),
 	} {
 		f.Add(s)

@@ -419,6 +419,7 @@ const (
     TriviaHashComment
     TriviaBlockComment
     TriviaDocComment
+    TriviaBOM // UTF-8 BOM at offset 0 only
 )
 
 type Trivia struct {
@@ -751,6 +752,9 @@ Normative rules:
 
 - Input bytes are treated as UTF-8 for parsing/formatting.
 - UTF-8 BOM at file start is preserved if present.
+  - the lexer records it as `TriviaBOM` leading trivia of the first token, so it is not an error and later tokens keep their source offsets
+  - the formatter emits it exactly once
+  - a BOM anywhere other than offset 0 is an unsupported character (error token + diagnostic)
 - Invalid UTF-8 bytes:
   - parser/lexer may emit diagnostics
   - formatter must refuse (`ErrUnsafeToFormat`) rather than rewrite bytes

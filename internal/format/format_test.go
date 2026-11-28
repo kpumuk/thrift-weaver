@@ -47,11 +47,21 @@ func TestDocumentPreservesBOMAndReportsMixedNewlines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Document: %v", err)
 	}
-	if len(res.Output) == 0 {
-		t.Fatal("expected formatted output")
+	want := []byte("\xEF\xBB\xBFconst i32 x = 1\nconst i32 y = 2\n")
+	if !bytes.Equal(res.Output, want) {
+		t.Fatalf("output = %q, want %q (exactly one BOM)", res.Output, want)
 	}
-	if !bytes.HasPrefix(res.Output, []byte("\xEF\xBB\xBF")) {
-		t.Fatalf("expected BOM preserved, got %q", res.Output)
+
+	again, err := syntax.Parse(context.Background(), res.Output, syntax.ParseOptions{URI: "test.thrift"})
+	if err != nil {
+		t.Fatalf("Parse formatted output: %v", err)
+	}
+	res2, err := Document(context.Background(), again, Options{})
+	if err != nil {
+		t.Fatalf("Document formatted output: %v", err)
+	}
+	if !bytes.Equal(res2.Output, res.Output) {
+		t.Fatalf("fmt(fmt(x)) = %q, want fmt(x) = %q", res2.Output, res.Output)
 	}
 
 	var sawMixed bool

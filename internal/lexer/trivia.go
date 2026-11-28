@@ -17,6 +17,8 @@ const (
 	TriviaHashComment
 	TriviaBlockComment
 	TriviaDocComment
+	// TriviaBOM is a UTF-8 byte order mark at offset 0. A BOM anywhere else is an error token.
+	TriviaBOM
 )
 
 func (k TriviaKind) String() string {
@@ -33,6 +35,8 @@ func (k TriviaKind) String() string {
 		return "BlockComment"
 	case TriviaDocComment:
 		return "DocComment"
+	case TriviaBOM:
+		return "BOM"
 	default:
 		return fmt.Sprintf("TriviaKind(%d)", k)
 	}
