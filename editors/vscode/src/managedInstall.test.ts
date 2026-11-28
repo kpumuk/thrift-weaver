@@ -225,28 +225,172 @@ test('installManagedThriftls rolls back to last-known-good on failed update', as
     assert.ok(value, `unexpected URL ${url}`);
     return value;
   };
+  const warnings: string[] = [];
 
   try {
-    await assert.rejects(
-      installManagedThriftls(
-        {
-          manifestURL,
-          storageDir,
-          platform: { os: 'linux', arch: 'amd64' },
-          failAfterBackupForTest: true,
-        },
-        {
-          fetchBytes: fetchFromMap,
-        },
-      ),
-      /simulated failure/,
+    const installed = await installManagedThriftls(
+      {
+        manifestURL,
+        storageDir,
+        platform: { os: 'linux', arch: 'amd64' },
+        failAfterBackupForTest: true,
+      },
+      {
+        fetchBytes: fetchFromMap,
+        warn: (message) => warnings.push(message),
+      },
     );
 
+    assert.equal(installed, currentBin);
     const content = await fs.readFile(currentBin, 'utf8');
     assert.match(content, /echo old/);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /simulated failure/);
   } finally {
     await fs.rm(storageDir, { recursive: true, force: true });
   }
+});
+
+type Release = {
+  version: string;
+  binaryContents: string;
+  // Overrides the manifest checksum to simulate a tampered or corrupt archive.
+  manifestSHA?: string;
+};
+
+// Serves one release at a time from a fake manifest endpoint and records
+// every URL fetched, so tests can tell a manifest check from a download.
+async function fakeReleaseServer(initial: Release) {
+  const manifestURL = 'https://example.invalid/manifest.json';
+  const fetched: string[] = [];
+  let offline = false;
+  let data = new Map<string, Uint8Array>();
+
+  async function publish(release: Release): Promise<void> {
+    const archive = await createTarGzBinaryArchive('thriftls', release.binaryContents);
+    const filename = `thriftls_${release.version}_linux_amd64.tar.gz`;
+    const archiveURL = `https://example.invalid/${filename}`;
+    const manifest = manifestJSON(release.version, {
+      os: 'linux',
+      arch: 'amd64',
+      url: archiveURL,
+      sha: release.manifestSHA ?? sha256Hex(archive),
+      size: archive.byteLength,
+      filename,
+    });
+    data = new Map([
+      [manifestURL, Buffer.from(manifest, 'utf8')],
+      [archiveURL, archive],
+    ]);
+  }
+  await publish(initial);
+
+  return {
+    manifestURL,
+    fetched,
+    publish,
+    setOffline(value: boolean): void {
+      offline = value;
+    },
+    async fetchBytes(url: string): Promise<Uint8Array> {
+      fetched.push(url);
+      if (offline) {
+        throw new Error('getaddrinfo ENOTFOUND example.invalid');
+      }
+      const value = data.get(url);
+      assert.ok(value, `unexpected URL ${url}`);
+      return value;
+    },
+  };
+}
+
+async function withStorage(fn: (storageDir: string) => Promise<void>): Promise<void> {
+  const storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'thrift-weaver-test-install-reuse-'));
+  try {
+    await fn(storageDir);
+  } finally {
+    await fs.rm(storageDir, { recursive: true, force: true });
+  }
+}
+
+test('installManagedThriftls reuses the installed version and downloads only a new one', async () => {
+  await withStorage(async (storageDir) => {
+    const server = await fakeReleaseServer({ version: '1.0.0', binaryContents: '#!/bin/sh\necho v1\n' });
+    const install = () =>
+      installManagedThriftls(
+        { manifestURL: server.manifestURL, storageDir, platform: { os: 'linux', arch: 'amd64' } },
+        { fetchBytes: (url) => server.fetchBytes(url) },
+      );
+
+    const first = await install();
+    assert.equal(server.fetched.length, 2);
+
+    server.fetched.length = 0;
+    const second = await install();
+    assert.equal(second, first);
+    assert.deepEqual(server.fetched, [server.manifestURL]);
+
+    server.fetched.length = 0;
+    await server.publish({ version: '1.0.1', binaryContents: '#!/bin/sh\necho v2\n' });
+    const third = await install();
+    assert.equal(third, first);
+    assert.equal(server.fetched.length, 2);
+    assert.match(await fs.readFile(third, 'utf8'), /echo v2/);
+
+    const managedEntries = await fs.readdir(path.join(storageDir, 'managed-thriftls'));
+    assert.deepEqual(managedEntries, ['current']);
+  });
+});
+
+test('installManagedThriftls falls back to the installed binary when the update cannot be fetched', async () => {
+  await withStorage(async (storageDir) => {
+    const server = await fakeReleaseServer({ version: '1.0.0', binaryContents: '#!/bin/sh\necho v1\n' });
+    const warnings: string[] = [];
+    const install = () =>
+      installManagedThriftls(
+        { manifestURL: server.manifestURL, storageDir, platform: { os: 'linux', arch: 'amd64' } },
+        { fetchBytes: (url) => server.fetchBytes(url), warn: (message) => warnings.push(message) },
+      );
+
+    server.setOffline(true);
+    await assert.rejects(install(), /ENOTFOUND/);
+    assert.deepEqual(warnings, []);
+
+    server.setOffline(false);
+    const installed = await install();
+
+    server.setOffline(true);
+    assert.equal(await install(), installed);
+    assert.match(await fs.readFile(installed, 'utf8'), /echo v1/);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /ENOTFOUND/);
+  });
+});
+
+test('installManagedThriftls keeps the installed binary when a new archive fails its checksum', async () => {
+  await withStorage(async (storageDir) => {
+    const server = await fakeReleaseServer({ version: '1.0.0', binaryContents: '#!/bin/sh\necho v1\n' });
+    const warnings: string[] = [];
+    const install = () =>
+      installManagedThriftls(
+        { manifestURL: server.manifestURL, storageDir, platform: { os: 'linux', arch: 'amd64' } },
+        { fetchBytes: (url) => server.fetchBytes(url), warn: (message) => warnings.push(message) },
+      );
+
+    const installed = await install();
+    await server.publish({ version: '1.0.1', binaryContents: '#!/bin/sh\necho evil\n', manifestSHA: '0'.repeat(64) });
+
+    assert.equal(await install(), installed);
+    assert.match(await fs.readFile(installed, 'utf8'), /echo v1/);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /checksum mismatch/);
+
+    // The rejected release must not be recorded as installed: the next start
+    // tries the download again instead of trusting the old binary as 1.0.1.
+    server.fetched.length = 0;
+    await install();
+    assert.equal(server.fetched.length, 2);
+  });
 });
 
 test('assertSafeArchiveEntryPath rejects traversal and absolute paths', () => {

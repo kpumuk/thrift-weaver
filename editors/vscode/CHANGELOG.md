@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Managed install no longer downloads `thriftls` again on every start, restart, or `thrift.*` setting change when the manifest still points at the installed version; it only checks the manifest.
+- When the manifest or a new `thriftls` archive cannot be downloaded or verified, the extension now starts the previously installed managed `thriftls` and logs a warning, instead of starting no language server.
+- Managed install no longer keeps an unused copy of every installed version under `managed-thriftls/versions/`, and removes that directory after the next update.
+
 ### Security
 
 - Updated the VS Code packaging and publishing toolchain to address CVE-2026-109461 in MSAL Node.
