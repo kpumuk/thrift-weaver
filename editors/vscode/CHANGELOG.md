@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Managed install no longer downloads `thriftls` again on every start, restart, or `thrift.*` setting change when the manifest still points at the installed version; it only checks the manifest.
 - When the manifest or a new `thriftls` archive cannot be downloaded or verified, the extension now starts the previously installed managed `thriftls` and logs a warning, instead of starting no language server.
 - Managed install no longer keeps an unused copy of every installed version under `managed-thriftls/versions/`, and removes that directory after the next update.
+- Dotted annotation names such as `cpp.type`, annotations on base and container types such as `typedef string (unicode.encoding = "UTF-16") s`, and `&` field references no longer report syntax errors; the non-Apache `reference` keyword is no longer accepted.
 
 ### Security
 

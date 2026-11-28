@@ -624,7 +624,7 @@ func shouldInsertSpace(prev, cur lexer.TokenKind) bool {
 		return true
 	case isClosingDelimiter(prev) && isWordLike(cur):
 		return true
-	case prev == lexer.TokenStar || cur == lexer.TokenStar:
+	case prev == lexer.TokenStar || cur == lexer.TokenStar, prev == lexer.TokenAmp || cur == lexer.TokenAmp:
 		return true
 	default:
 		return false

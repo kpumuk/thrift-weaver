@@ -195,6 +195,8 @@ func (s *scanner) scanToken() Token {
 			return Token{Kind: TokenStar, Span: span(start, s.i)}
 		case '/':
 			return Token{Kind: TokenSlash, Span: span(start, s.i)}
+		case '&':
+			return Token{Kind: TokenAmp, Span: span(start, s.i)}
 		default:
 			return *s.makeErrorToken(start, s.i, DiagnosticUnknownCharacter, fmt.Sprintf("unknown character %q", b))
 		}

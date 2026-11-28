@@ -68,6 +68,7 @@ const i32 HEX=0x0A
 const map<string,list<i32>> DATA={ 'a' : [1,2,3,], 'b':[],}
 struct Holder{-2: optional byte legacy = 1,2: optional map<string,list<i32>> data = {'x':[1,2],};}
 service API{async void go(1:byte x,2:uuid id);}
+struct Node{1: optional Node&next(cpp.ref="true");}
 `)
 
 	res, err := Source(context.Background(), src, "test.thrift", Options{})
@@ -85,6 +86,7 @@ service API{async void go(1:byte x,2:uuid id);}
 		"[1, 2, 3,]",
 		"{'x': [1, 2],}",
 		"-2: optional byte legacy = 1,",
+		`1: optional Node & next(cpp.ref = "true"),`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("formatted output missing %q\noutput:\n%s", want, out)

@@ -70,6 +70,7 @@ const (
 	TokenMinus
 	TokenStar
 	TokenSlash
+	TokenAmp
 )
 
 func (k TokenKind) String() string {
@@ -186,6 +187,8 @@ func (k TokenKind) String() string {
 		return "Star"
 	case TokenSlash:
 		return "Slash"
+	case TokenAmp:
+		return "Amp"
 	default:
 		return fmt.Sprintf("TokenKind(%d)", k)
 	}

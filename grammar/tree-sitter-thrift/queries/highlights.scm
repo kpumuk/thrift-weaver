@@ -60,4 +60,4 @@
 (const_declaration name: (identifier) @constant)
 (field name: (identifier) @property)
 (function_definition name: (identifier) @function)
-(annotation name: (identifier) @attribute)
+(annotation name: (scoped_identifier) @attribute)

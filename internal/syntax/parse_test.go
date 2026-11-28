@@ -190,16 +190,21 @@ typedef set cpp_type "std::set<std::string>" <string> Keys
 typedef list cpp_type "std::vector<std::string>" <string> cpp_type "std::list<std::string>" LegacyList
 
 struct S xsd_all {
-  1: optional i32 reference namespace = -2 xsd_optional xsd_nillable xsd_attrs { 1: string include } (doc = "ok")
+  1: optional i32 namespace = -2 xsd_optional xsd_nillable xsd_attrs { 1: string include } (doc = "ok")
+  2: optional S & next (cpp.ref = "true", cpp.use_pointer,)
 }
+
+typedef string ( unicode.encoding = "UTF-16" ) non_latin_string (foo="bar")
+typedef list< double ( cpp.fixed_point = "16" ) > tiny_float_list
+typedef map<string, set<i32> (python.immutable = "")> (a.b.c = "d"; e) Nested
 `)
 
 	tree, err := Parse(context.Background(), src, ParseOptions{})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if hasDiagnosticCode(tree.Diagnostics, DiagnosticParserErrorNode) || hasDiagnosticCode(tree.Diagnostics, DiagnosticParserMissingNode) {
-		t.Fatalf("unexpected parser diagnostics: %+v", tree.Diagnostics)
+	if len(tree.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", tree.Diagnostics)
 	}
 	for _, kind := range []string{
 		"namespace_declaration",
@@ -213,6 +218,20 @@ struct S xsd_all {
 		if !treeHasKind(tree, kind) {
 			t.Fatalf("expected CST kind %q", kind)
 		}
+	}
+}
+
+func TestParseRejectsReferenceKeyword(t *testing.T) {
+	t.Parallel()
+
+	// Apache Thrift spells field references as '&'; "reference" is an ordinary identifier.
+	src := []byte("struct A {\n  1: optional A reference next\n}\n")
+	tree, err := Parse(context.Background(), src, ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !hasDiagnosticCode(tree.Diagnostics, DiagnosticParserErrorNode) && !hasDiagnosticCode(tree.Diagnostics, DiagnosticParserMissingNode) {
+		t.Fatalf("expected parser diagnostic for 'reference' keyword, got %+v", tree.Diagnostics)
 	}
 }
 
@@ -287,14 +306,45 @@ func TestParseCorpusFixtures(t *testing.T) {
 			}
 			for _, file := range files {
 				t.Run(filepath.Base(file), func(t *testing.T) {
-					assertParseFile(t, file)
+					tree := assertParseFile(t, file)
+					if setName == "valid" {
+						assertNoSyntaxDiagnostics(t, file, tree)
+					}
 				})
 			}
 		})
 	}
+
+	t.Run("apache", func(t *testing.T) {
+		t.Parallel()
+
+		root, err := testutil.RepoRoot()
+		if err != nil {
+			t.Fatalf("RepoRoot: %v", err)
+		}
+		files, err := filepath.Glob(filepath.Join(root, "testdata", "format", "input", "*_apache_*.thrift"))
+		if err != nil || len(files) == 0 {
+			t.Fatalf("expected Apache fixtures, got %v (err=%v)", files, err)
+		}
+		for _, file := range files {
+			t.Run(filepath.Base(file), func(t *testing.T) {
+				assertNoSyntaxDiagnostics(t, file, assertParseFile(t, file))
+			})
+		}
+	})
 }
 
-func assertParseFile(t *testing.T, file string) {
+func assertNoSyntaxDiagnostics(t *testing.T, file string, tree *Tree) {
+	t.Helper()
+
+	for _, d := range tree.Diagnostics {
+		if d.Source == "lexer" || d.Source == "parser" {
+			t.Errorf("Parse(%q): unexpected %s diagnostic %s at %v: %s", file, d.Source, d.Code, d.Span, d.Message)
+		}
+	}
+}
+
+func assertParseFile(t *testing.T, file string) *Tree {
 	t.Helper()
 
 	src, err := os.ReadFile(file)
@@ -311,6 +361,7 @@ func assertParseFile(t *testing.T, file string) {
 	if tree == nil || tree.Root == NoNode {
 		t.Fatalf("Parse(%q): missing root", file)
 	}
+	return tree
 }
 
 type snapshot struct {

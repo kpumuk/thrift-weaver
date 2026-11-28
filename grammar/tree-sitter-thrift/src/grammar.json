@@ -1065,7 +1065,7 @@
     },
     "field_reference": {
       "type": "STRING",
-      "value": "reference"
+      "value": "&"
     },
     "field_name": {
       "type": "CHOICE",
@@ -1483,20 +1483,42 @@
       "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "base_type"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "map_type"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "list_type"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "set_type"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "base_type"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "map_type"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "list_type"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "set_type"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "annotations"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
         },
         {
           "type": "SYMBOL",
@@ -1745,7 +1767,7 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "scoped_identifier"
           }
         },
         {

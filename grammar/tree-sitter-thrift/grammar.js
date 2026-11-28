@@ -148,7 +148,7 @@ module.exports = grammar({
     field_id: ($) => $.int_literal,
 
     requiredness: () => choice('required', 'optional'),
-    field_reference: () => 'reference',
+    field_reference: () => '&',
     field_name: ($) => choice($.identifier, $.field_keyword_name),
     field_keyword_name: () =>
       choice(
@@ -217,7 +217,13 @@ module.exports = grammar({
     parameter_list: ($) => seq('(', repeat($.field), ')'),
     throws_clause: ($) => seq('throws', field('parameters', $.parameter_list)),
 
-    type: ($) => choice($.base_type, $.map_type, $.list_type, $.set_type, $.scoped_identifier),
+    // Apache Thrift accepts annotations after base and container types, but not
+    // after named types (thrifty.yy: BaseType and ContainerType take TypeAnnotations).
+    type: ($) =>
+      choice(
+        seq(choice($.base_type, $.map_type, $.list_type, $.set_type), optional($.annotations)),
+        $.scoped_identifier,
+      ),
 
     base_type: () =>
       choice(
@@ -261,7 +267,7 @@ module.exports = grammar({
 
     annotation: ($) =>
       seq(
-        field('name', $.identifier),
+        field('name', $.scoped_identifier),
         optional(seq('=', field('value', $.annotation_value))),
         optional($._statement_sep),
       ),
