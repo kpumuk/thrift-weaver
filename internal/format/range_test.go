@@ -42,6 +42,32 @@ func TestRangeWidensToFieldAncestorAndReturnsEdit(t *testing.T) {
 	}
 }
 
+func TestRangeOnFirstDeclarationAfterBOMMatchesDocument(t *testing.T) {
+	t.Parallel()
+
+	src := []byte("\xEF\xBB\xBFstruct   Foo{1:required i32 id;}\n")
+	tree, err := syntax.Parse(context.Background(), src, syntax.ParseOptions{URI: "x.thrift"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	got, err := Range(context.Background(), tree, text.Span{Start: 3, End: 9}, Options{})
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(got.Edits) != 1 || got.Edits[0].Span.Start != 3 {
+		t.Fatalf("expected one edit starting after the BOM, got %+v", got.Edits)
+	}
+	out, err := text.ApplyEdits(src, got.Edits)
+	if err != nil {
+		t.Fatalf("ApplyEdits: %v", err)
+	}
+	want := []byte("\xEF\xBB\xBFstruct Foo {\n  1: required i32 id;\n}\n")
+	if !bytes.Equal(out, want) {
+		t.Fatalf("range formatted output = %q, want %q", out, want)
+	}
+}
+
 func TestRangeWidensWhitespaceSelectionToBlockAncestor(t *testing.T) {
 	t.Parallel()
 

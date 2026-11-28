@@ -125,6 +125,8 @@ func (w *tokenWriter) emitLeadingTrivia(src []byte, trivia []lexer.Trivia, inden
 				return fmt.Errorf("invalid trivia span %s", tr.Span)
 			}
 			w.writeRaw(indentLevel, raw)
+		case lexer.TriviaBOM:
+			// formatSyntaxTree writes the BOM from the source policy.
 		default:
 			// Ignore unknown trivia conservatively.
 		}

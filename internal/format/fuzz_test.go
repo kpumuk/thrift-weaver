@@ -51,7 +51,8 @@ func addFormatSeeds(f *testing.F) {
 		[]byte("const string X = 'unterminated\n"), // unsafe refusal expected
 		[]byte("/* unterminated block comment"),    // unsafe refusal expected
 		[]byte("struct T {\n  1: string a\n\n# comment\n  2: string b\n}\n"),
-		{0xff, 0xfe, 0xfd}, // invalid UTF-8 -> unsafe refusal expected
+		{0xff, 0xfe, 0xfd},                  // invalid UTF-8 -> unsafe refusal expected
+		[]byte("\xEF\xBB\xBFstruct S {}\n"), // UTF-8 BOM at file start
 	} {
 		f.Add(s)
 	}

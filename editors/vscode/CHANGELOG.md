@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Managed install no longer keeps an unused copy of every installed version under `managed-thriftls/versions/`, and removes that directory after the next update.
 - Dotted annotation names such as `cpp.type`, annotations on base and container types such as `typedef string (unicode.encoding = "UTF-16") s`, and `&` field references no longer report syntax errors; the non-Apache `reference` keyword is no longer accepted.
 - Renaming a symbol that is used in files that are not open no longer fails with "Unknown workspace edit change received".
+- Files that start with a UTF-8 byte order mark no longer report an unsupported character at 1:1, and formatting keeps the single BOM instead of adding another BOM and a space each time.
 
 ### Security
 

@@ -61,6 +61,8 @@ func (e CommentEmitter) EmitLeading(src []byte, trivia []lexer.Trivia, indentLev
 			out.Write(raw)
 			atLineStart = endsWithLineBreak(raw)
 			pendingSpace = false
+		case lexer.TriviaBOM:
+			// The BOM is written once by formatSyntaxTree, never as comment trivia.
 		default:
 			// Unknown trivia kind should not break formatting; ignore it conservatively.
 		}

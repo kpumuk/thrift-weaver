@@ -99,7 +99,7 @@ func extractCommentLexemes(src []byte) []string {
 				if raw != nil {
 					out = append(out, string(raw))
 				}
-			case lexer.TriviaWhitespace, lexer.TriviaNewline:
+			case lexer.TriviaWhitespace, lexer.TriviaNewline, lexer.TriviaBOM:
 				// Ignore non-comment trivia.
 			default:
 				// Ignore unknown trivia kinds conservatively.

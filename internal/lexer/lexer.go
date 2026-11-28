@@ -1,11 +1,14 @@
 package lexer
 
 import (
+	"bytes"
 	"fmt"
 	"unicode/utf8"
 
 	"github.com/kpumuk/thrift-weaver/internal/text"
 )
+
+var utf8BOM = []byte("\xEF\xBB\xBF")
 
 // DiagnosticCode identifies lexer diagnostic categories.
 type DiagnosticCode string
@@ -75,6 +78,11 @@ func (s *scanner) run() {
 
 func (s *scanner) scanLeadingTrivia() ([]Trivia, *Token) {
 	var out []Trivia
+
+	if s.i == 0 && bytes.HasPrefix(s.src, utf8BOM) {
+		s.i = len(utf8BOM)
+		out = append(out, Trivia{Kind: TriviaBOM, Span: span(0, s.i)})
+	}
 
 	for !s.eof() {
 		start := s.i

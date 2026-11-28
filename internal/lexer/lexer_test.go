@@ -125,6 +125,60 @@ func TestLexMalformedInputsEmitErrorTokensAndDiagnostics(t *testing.T) {
 	}
 }
 
+func TestLexBOMIsTriviaOnlyAtFileStart(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		src      string
+		want     string
+		wantDiag bool
+	}{
+		"BOM before declaration": {
+			src: "\xEF\xBB\xBFstruct S {}\n",
+			want: `KwStruct("struct") lead=[BOM("\ufeff")]
+Identifier("S") lead=[Whitespace(" ")]
+LBrace("{") lead=[Whitespace(" ")]
+RBrace("}") lead=[]
+EOF("") lead=[Newline("\n")]`,
+		},
+		"BOM before comment": {
+			src:  "\xEF\xBB\xBF# c\n",
+			want: `EOF("") lead=[BOM("\ufeff"),HashComment("# c"),Newline("\n")]`,
+		},
+		"BOM after offset 0": {
+			src: " \xEF\xBB\xBFstruct",
+			want: `Error("\ufeff") lead=[Whitespace(" ")]
+KwStruct("struct") lead=[]
+EOF("") lead=[]`,
+			wantDiag: true,
+		},
+		"second BOM": {
+			src: "\xEF\xBB\xBF\xEF\xBB\xBF",
+			want: `Error("\ufeff") lead=[BOM("\ufeff")]
+EOF("") lead=[]`,
+			wantDiag: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			src := []byte(tc.src)
+			res := Lex(src)
+			if got := renderTokens(src, res.Tokens); got != tc.want {
+				t.Fatalf("tokens mismatch\n--- got ---\n%s\n--- want ---\n%s", got, tc.want)
+			}
+			if gotDiag := len(res.Diagnostics) != 0; gotDiag != tc.wantDiag {
+				t.Fatalf("diagnostics = %+v, want any: %v", res.Diagnostics, tc.wantDiag)
+			}
+			if tc.wantDiag && res.Diagnostics[0].Code != DiagnosticUnknownCharacter {
+				t.Fatalf("diagnostic code = %s, want %s", res.Diagnostics[0].Code, DiagnosticUnknownCharacter)
+			}
+		})
+	}
+}
+
 func TestLexTriviaAndLiteralFidelity(t *testing.T) {
 	t.Parallel()
 
