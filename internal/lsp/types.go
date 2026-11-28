@@ -297,7 +297,7 @@ type PrepareRenameResult struct {
 // OptionalVersionedTextDocumentIdentifier identifies a document for workspace edits.
 type OptionalVersionedTextDocumentIdentifier struct {
 	URI     string `json:"uri"`
-	Version *int32 `json:"version,omitempty"`
+	Version *int32 `json:"version"` // nil marshals as null, which LSP requires for closed documents.
 }
 
 // TextDocumentEdit is a workspace edit for one document.

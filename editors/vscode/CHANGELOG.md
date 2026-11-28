@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - When the manifest or a new `thriftls` archive cannot be downloaded or verified, the extension now starts the previously installed managed `thriftls` and logs a warning, instead of starting no language server.
 - Managed install no longer keeps an unused copy of every installed version under `managed-thriftls/versions/`, and removes that directory after the next update.
 - Dotted annotation names such as `cpp.type`, annotations on base and container types such as `typedef string (unicode.encoding = "UTF-16") s`, and `&` field references no longer report syntax errors; the non-Apache `reference` keyword is no longer accepted.
+- Renaming a symbol that is used in files that are not open no longer fails with "Unknown workspace edit change received".
 
 ### Security
 
