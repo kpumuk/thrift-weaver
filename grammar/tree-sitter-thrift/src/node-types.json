@@ -8,7 +8,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "scoped_identifier",
             "named": true
           }
         ]
@@ -1085,9 +1085,13 @@
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "annotations",
+          "named": true
+        },
         {
           "type": "base_type",
           "named": true
