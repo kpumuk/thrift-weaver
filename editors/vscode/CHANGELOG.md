@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+
+## [v0.3.6] - 2026-11-28
+
 ### Fixed
 
 - Managed install no longer downloads `thriftls` again on every start, restart, or `thrift.*` setting change when the manifest still points at the installed version; it only checks the manifest.
@@ -141,7 +144,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Shipped extension packages as `.vsix` assets on GitHub releases.
 
-[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.6...HEAD
+[v0.3.6]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.5...v0.3.6
 [v0.3.5]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.4...v0.3.5
 [v0.3.4]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.3...v0.3.4
 [v0.3.3]: https://github.com/kpumuk/thrift-weaver/compare/v0.3.2...v0.3.3
